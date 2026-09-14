@@ -1,58 +1,29 @@
+using System.Diagnostics;
 using Facturacion.Cpe;
 using Facturacion.Persistencia;
 
 // ---------------------------------------------------------------------------
-// Demuestra el ciclo completo del almacén de certificados:
+// Prueba el repositorio de comprobantes, con foco en lo que de verdad importa:
 //
-//   1. Carga el .pfx del disco
-//   2. Lo cifra y lo guarda en la base
-//   3. Lo recupera descifrado
-//   4. Firma una factura con él y verifica la firma
+//   1. Que 50 emisiones SIMULTÁNEAS no produzcan correlativos duplicados
+//      ni saltados.
+//   2. Que la idempotencia evite duplicados por reintentos.
+//   3. Que la bitácora registre cada cambio de estado.
 //
-// El certificado nunca queda en claro en la base ni se vuelve a escribir
-// al disco.
+// El primer punto es la razón de ser de este paso. Un duplicado de correlativo
+// no es un bug: es un problema tributario.
 // ---------------------------------------------------------------------------
 
-const string RutaCertificado = "certificado.pfx";
-const string ClaveCertificado = "123456";
-
-// El puerto es 5433 porque el 5432 ya lo ocupa otro contenedor.
 const string CadenaConexion =
     "Host=localhost;Port=5433;Database=facturacion;" +
     "Username=facturacion_app;Password=cambiame_en_produccion";
 
-// --- 1. La llave maestra ---------------------------------------------------
+const string RucEmisor = "20601234567";
 
-if (string.IsNullOrWhiteSpace(
-        Environment.GetEnvironmentVariable(ProtectorAesGcm.VariableLlaveMaestra)))
-{
-    Console.ForegroundColor = ConsoleColor.Yellow;
-    Console.WriteLine($"Falta la variable {ProtectorAesGcm.VariableLlaveMaestra}.");
-    Console.ResetColor();
-    Console.WriteLine();
-    Console.WriteLine("Genera una y guárdala FUERA del repositorio. En PowerShell:");
-    Console.WriteLine();
-    Console.WriteLine($"  $env:{ProtectorAesGcm.VariableLlaveMaestra} = \"{ProtectorAesGcm.GenerarLlaveBase64()}\"");
-    Console.WriteLine();
-    Console.WriteLine("Esa línea la define solo para la sesión actual de PowerShell.");
-    Console.WriteLine("Para que Visual Studio la vea, defínela a nivel de usuario:");
-    Console.WriteLine();
-    Console.WriteLine($"  [Environment]::SetEnvironmentVariable(\"{ProtectorAesGcm.VariableLlaveMaestra}\", \"<la llave>\", \"User\")");
-    Console.WriteLine();
-    Console.WriteLine("Y reinicia Visual Studio para que tome el cambio.");
-    Console.WriteLine();
-    Console.WriteLine("SI PIERDES ESTA LLAVE, los certificados guardados quedan");
-    Console.WriteLine("irrecuperables. No hay puerta trasera: de eso se trata.");
-    return;
-}
-
-var protector = ProtectorAesGcm.DesdeEntorno();
 var sesiones = new FabricaSesiones(CadenaConexion);
-var almacen = new AlmacenCertificados(sesiones, protector);
+var repositorio = new RepositorioComprobantes(sesiones);
 
-Console.WriteLine("Llave maestra   : cargada");
-
-// --- 2. Resolver el tenant -------------------------------------------------
+// --- Resolver el tenant ----------------------------------------------------
 
 Guid tenantId;
 
@@ -61,7 +32,7 @@ await using (var catalogo = await sesiones.AbrirCatalogoAsync())
     var comando = new Npgsql.NpgsqlCommand(
         "SELECT id FROM tenants WHERE ruc = @ruc", catalogo);
 
-    comando.Parameters.AddWithValue("ruc", "20601234567");
+    comando.Parameters.AddWithValue("ruc", RucEmisor);
 
     var resultado = await comando.ExecuteScalarAsync();
 
@@ -74,83 +45,161 @@ await using (var catalogo = await sesiones.AbrirCatalogoAsync())
     tenantId = (Guid)resultado;
 }
 
-Console.WriteLine($"Tenant          : {tenantId}");
+Console.WriteLine($"Tenant: {tenantId}");
 Console.WriteLine();
 
-// --- 3. Guardar el certificado cifrado -------------------------------------
+// --- Dar de alta la serie --------------------------------------------------
 
-var rutaPfx = Path.Combine(AppContext.BaseDirectory, RutaCertificado);
+await repositorio.AsegurarSerieAsync(tenantId, TipoComprobante.Factura, "F001");
 
-if (!File.Exists(rutaPfx))
+// ===========================================================================
+// PRUEBA 1: 50 emisiones simultáneas
+// ===========================================================================
+
+Console.WriteLine(new string('=', 60));
+Console.WriteLine("PRUEBA 1: 50 emisiones simultáneas");
+Console.WriteLine(new string('=', 60));
+
+const int Simultaneas = 50;
+
+var cronometro = Stopwatch.StartNew();
+
+var tareas = Enumerable.Range(1, Simultaneas).Select(async i =>
 {
-    Console.WriteLine($"No se encontró el certificado en: {rutaPfx}");
-    return;
+    try
+    {
+        return await repositorio.CrearAsync(tenantId, NuevaFactura($"ITEM-{i:D3}"));
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  Falló la emisión {i}: {ex.Message}");
+        return null;
+    }
+});
+
+var resultados = (await Task.WhenAll(tareas))
+    .Where(r => r is not null)
+    .Select(r => r!)
+    .ToList();
+
+cronometro.Stop();
+
+Console.WriteLine($"Emitidas      : {resultados.Count} de {Simultaneas}");
+Console.WriteLine($"Duración      : {cronometro.ElapsedMilliseconds} ms");
+
+var correlativos = resultados.Select(r => r.Correlativo).OrderBy(c => c).ToList();
+
+var duplicados = correlativos
+    .GroupBy(c => c)
+    .Where(g => g.Count() > 1)
+    .Select(g => g.Key)
+    .ToList();
+
+var rangoEsperado = correlativos.Count == 0
+    ? 0
+    : correlativos[^1] - correlativos[0] + 1;
+
+var huecos = rangoEsperado - correlativos.Count;
+
+Console.WriteLine($"Rango         : {correlativos.FirstOrDefault()} a {correlativos.LastOrDefault()}");
+
+Console.ForegroundColor = duplicados.Count == 0 ? ConsoleColor.Green : ConsoleColor.Red;
+Console.WriteLine(duplicados.Count == 0
+    ? "Duplicados    : ninguno"
+    : $"DUPLICADOS    : {string.Join(", ", duplicados)}");
+Console.ResetColor();
+
+Console.ForegroundColor = huecos == 0 ? ConsoleColor.Green : ConsoleColor.Yellow;
+Console.WriteLine(huecos == 0
+    ? "Huecos        : ninguno"
+    : $"Huecos        : {huecos} (correlativos quemados por fallos)");
+Console.ResetColor();
+
+// ===========================================================================
+// PRUEBA 2: idempotencia
+// ===========================================================================
+
+Console.WriteLine();
+Console.WriteLine(new string('=', 60));
+Console.WriteLine("PRUEBA 2: idempotencia");
+Console.WriteLine(new string('=', 60));
+
+var clave = $"prueba-{Guid.NewGuid()}";
+
+var primera = await repositorio.CrearAsync(
+    tenantId, NuevaFactura("IDEMPOTENTE"), idempotencyKey: clave);
+
+Console.WriteLine($"Primera vez   : {primera.NumeroCompleto}  (nueva: {!primera.YaExistia})");
+
+// Mismo envío otra vez, como si el cliente hubiera reintentado tras un timeout.
+var segunda = await repositorio.CrearAsync(
+    tenantId, NuevaFactura("IDEMPOTENTE"), idempotencyKey: clave);
+
+Console.WriteLine($"Reintento     : {segunda.NumeroCompleto}  (nueva: {!segunda.YaExistia})");
+
+var mismoComprobante = primera.Id == segunda.Id;
+
+Console.ForegroundColor = mismoComprobante ? ConsoleColor.Green : ConsoleColor.Red;
+Console.WriteLine(mismoComprobante
+    ? "El reintento devolvió el mismo comprobante. Sin duplicado."
+    : "PROBLEMA: el reintento creó un comprobante nuevo.");
+Console.ResetColor();
+
+// ===========================================================================
+// PRUEBA 3: bitácora
+// ===========================================================================
+
+Console.WriteLine();
+Console.WriteLine(new string('=', 60));
+Console.WriteLine("PRUEBA 3: bitácora de estados");
+Console.WriteLine(new string('=', 60));
+
+var seguimiento = resultados.First();
+
+await repositorio.RegistrarCambioAsync(tenantId, seguimiento.Id,
+    new CambioEstado(EstadoCpe.Firmado, Mensaje: "XML firmado."));
+
+await repositorio.RegistrarCambioAsync(tenantId, seguimiento.Id,
+    new CambioEstado(EstadoCpe.Enviado, Mensaje: "Enviado a SUNAT.",
+        DuracionMs: 2840));
+
+await repositorio.RegistrarCambioAsync(tenantId, seguimiento.Id,
+    new CambioEstado(EstadoCpe.Aceptado,
+        CodigoSunat: "0",
+        Mensaje: "La Factura ha sido aceptada",
+        DuracionMs: 120));
+
+Console.WriteLine($"Comprobante   : {seguimiento.NumeroCompleto}");
+Console.WriteLine();
+
+foreach (var intento in await repositorio.HistorialAsync(tenantId, seguimiento.Id))
+{
+    var duracion = intento.DuracionMs is null ? "" : $"  ({intento.DuracionMs} ms)";
+
+    Console.WriteLine(
+        $"  {intento.IntentoNro}. {intento.EstadoAnterior ?? "—"} → " +
+        $"{intento.EstadoNuevo}{duracion}");
+    Console.WriteLine($"     {intento.Mensaje}");
 }
 
-var contenidoPfx = await File.ReadAllBytesAsync(rutaPfx);
-
-Console.WriteLine("Guardando el certificado cifrado...");
-
-var certificadoId = await almacen.GuardarAsync(
-    tenantId, contenidoPfx, ClaveCertificado);
-
-Console.WriteLine($"Guardado con id : {certificadoId}");
-Console.WriteLine();
-
-// --- 4. Verificar que en la base NO está en claro --------------------------
-
-await using (var sesion = await sesiones.AbrirAsync(tenantId))
-{
-    var comando = new Npgsql.NpgsqlCommand(
-        "SELECT pfx_cifrado FROM certificados WHERE id = @id",
-        sesion.Conexion, sesion.Transaccion);
-
-    comando.Parameters.AddWithValue("id", certificadoId);
-
-    var cifrado = (byte[])(await comando.ExecuteScalarAsync())!;
-
-    // Un PFX real empieza con la secuencia DER 0x30 0x82.
-    // Si lo guardado empezara así, no estaría cifrado.
-    var pareceUnPfxEnClaro = cifrado.Length > 2 && cifrado[0] == 0x30 && cifrado[1] == 0x82;
-
-    Console.ForegroundColor = pareceUnPfxEnClaro ? ConsoleColor.Red : ConsoleColor.Green;
-    Console.WriteLine(pareceUnPfxEnClaro
-        ? "PROBLEMA: el certificado parece estar guardado EN CLARO."
-        : "En la base : cifrado, no se reconoce como PFX");
-    Console.ResetColor();
-
-    Console.WriteLine($"Original   : {contenidoPfx.Length:N0} bytes");
-    Console.WriteLine($"Cifrado    : {cifrado.Length:N0} bytes (28 más: nonce y tag)");
-
-    await sesion.ConfirmarAsync();
-}
+// --- Estado final ----------------------------------------------------------
 
 Console.WriteLine();
+Console.WriteLine("Últimos comprobantes:");
 
-// --- 5. Recuperarlo y firmar con él ----------------------------------------
+foreach (var r in await repositorio.ListarAsync(tenantId, limite: 5))
+    Console.WriteLine($"  {r.NumeroCompleto}  {r.Estado,-28}  {r.ImporteTotal:N2} {r.Moneda}");
 
-Console.WriteLine("Recuperando el certificado desde la base...");
+// ---------------------------------------------------------------------------
 
-using var certificado = await almacen.ObtenerActivoAsync(tenantId);
-
-if (certificado is null)
-{
-    Console.WriteLine("No hay certificado activo para este tenant.");
-    return;
-}
-
-Console.WriteLine($"Subject         : {certificado.Subject}");
-Console.WriteLine($"Llave privada   : {(certificado.HasPrivateKey ? "sí" : "NO")}");
-Console.WriteLine();
-
-var factura = new Factura
+static Factura NuevaFactura(string descripcion) => new()
 {
     Serie = "F001",
-    Correlativo = 40,
+    // Sin correlativo: lo asigna la base.
     FechaEmision = DateTime.Now,
     Emisor = new Emisor
     {
-        Ruc = "20601234567",
+        Ruc = RucEmisor,
         RazonSocial = "MI EMPRESA SAC",
         Direccion = "AV. EJEMPLO 123",
         Distrito = "LIMA",
@@ -168,36 +217,9 @@ var factura = new Factura
         new LineaComprobante
         {
             Numero = 1,
-            Descripcion = "PRODUCTO DE PRUEBA",
+            Descripcion = descripcion,
             Cantidad = 2,
             ValorUnitario = 50.00m
         }
     ]
 };
-
-var firmado = FirmadorXml.Firmar(
-    GeneradorFacturaXml.Generar(factura), certificado);
-
-Console.ForegroundColor = ConsoleColor.Green;
-Console.WriteLine("Factura firmada con el certificado recuperado de la base.");
-Console.ResetColor();
-
-// --- 6. Listar los certificados del tenant ---------------------------------
-
-Console.WriteLine();
-Console.WriteLine("Certificados del tenant:");
-
-foreach (var info in await almacen.ListarAsync(tenantId))
-{
-    var marca = info.Activo ? "activo " : "inactivo";
-    Console.WriteLine(
-        $"  [{marca}] {info.Subject}  vence {info.ValidoHasta:yyyy-MM-dd}  " +
-        $"({info.DiasParaVencer} días)");
-
-    if (info.RequiereAlerta())
-    {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("            ATENCIÓN: vence pronto. Hay que renovarlo.");
-        Console.ResetColor();
-    }
-}

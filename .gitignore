@@ -116,3 +116,5 @@ $RECYCLE.BIN/
 ## Docker
 ## ---------------------------------------------------------------
 docker-compose.override.yml
+
+launchSettings.json
