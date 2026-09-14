@@ -15,6 +15,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Facturacion.Api", "Facturac
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Facturacion.Worker", "Facturacion.Worker\Facturacion.Worker.csproj", "{DF23FF90-9F28-42D2-8E15-7A7D96762D1D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Facturacion.Pdf", "Facturacion.Pdf\Facturacion.Pdf.csproj", "{FC79C8FC-CA6B-459F-9C70-FE23FD55F3A2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -97,6 +99,18 @@ Global
 		{DF23FF90-9F28-42D2-8E15-7A7D96762D1D}.Release|x64.Build.0 = Release|Any CPU
 		{DF23FF90-9F28-42D2-8E15-7A7D96762D1D}.Release|x86.ActiveCfg = Release|Any CPU
 		{DF23FF90-9F28-42D2-8E15-7A7D96762D1D}.Release|x86.Build.0 = Release|Any CPU
+		{FC79C8FC-CA6B-459F-9C70-FE23FD55F3A2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FC79C8FC-CA6B-459F-9C70-FE23FD55F3A2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FC79C8FC-CA6B-459F-9C70-FE23FD55F3A2}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{FC79C8FC-CA6B-459F-9C70-FE23FD55F3A2}.Debug|x64.Build.0 = Debug|Any CPU
+		{FC79C8FC-CA6B-459F-9C70-FE23FD55F3A2}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{FC79C8FC-CA6B-459F-9C70-FE23FD55F3A2}.Debug|x86.Build.0 = Debug|Any CPU
+		{FC79C8FC-CA6B-459F-9C70-FE23FD55F3A2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FC79C8FC-CA6B-459F-9C70-FE23FD55F3A2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FC79C8FC-CA6B-459F-9C70-FE23FD55F3A2}.Release|x64.ActiveCfg = Release|Any CPU
+		{FC79C8FC-CA6B-459F-9C70-FE23FD55F3A2}.Release|x64.Build.0 = Release|Any CPU
+		{FC79C8FC-CA6B-459F-9C70-FE23FD55F3A2}.Release|x86.ActiveCfg = Release|Any CPU
+		{FC79C8FC-CA6B-459F-9C70-FE23FD55F3A2}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Facturacion.Cpe;
+using Facturacion.Pdf;
 using Facturacion.Persistencia;
 using Microsoft.Extensions.Logging;
 
@@ -202,6 +203,19 @@ public sealed class ProcesadorComprobantes
             // Ya se resolvió: se limpia el contador de reintentos.
             await _cola.LimpiarReintentosAsync(trabajo.Id, ct);
 
+            // --- 6. La representación impresa --------------------------------
+            //
+            // Se genera DESPUÉS de conocer la respuesta de SUNAT, no antes,
+            // para poder imprimir el estado real en el pie. Un PDF que dice
+            // "aceptado" sobre un comprobante rechazado es peor que no tener
+            // PDF: el cliente lo entrega creyendo que está todo en orden.
+            //
+            // Si falla, NO se deshace nada: el comprobante ya está aceptado y
+            // el PDF puede regenerarse cuando se quiera. Perder el comprobante
+            // por un problema de impresión sería absurdo.
+            await GenerarPdfAsync(
+                trabajo, comprobante, firmado, tenant.Ruc, envio, ct);
+
             if (envio.Aceptado)
             {
                 _log.LogInformation(
@@ -284,6 +298,46 @@ public sealed class ProcesadorComprobantes
         _log.LogWarning(
             "{Numero} falló (intento {Intento}). Reintento en {Espera}. {Mensaje}",
             numero, fallosPrevios + 1, Describir(espera), envio.Descripcion);
+    }
+
+    /// <summary>
+    /// Genera y guarda el PDF. Los fallos aquí no afectan al comprobante.
+    /// </summary>
+    private async Task GenerarPdfAsync(
+        TrabajoComprobante trabajo,
+        ComprobanteBase comprobante,
+        System.Xml.XmlDocument firmado,
+        string ruc,
+        ResultadoEnvio envio,
+        CancellationToken ct)
+    {
+        try
+        {
+            // El resumen de la firma se LEE del XML, no se recalcula: el QR
+            // debe declarar exactamente lo que se firmó.
+            var digest = CodigoQr.LeerDigest(firmado);
+
+            var opciones = new OpcionesImpresion(
+                EstadoSunat: envio.Aceptado ? "Aceptado por SUNAT" : "Rechazado",
+                MensajeSunat: envio.Descripcion);
+
+            var pdf = GeneradorPdf.Generar(comprobante, digest, opciones);
+
+            var ruta = await _archivos.GuardarAsync(
+                ruc, comprobante.FechaEmision,
+                $"{comprobante.NombreArchivo}.pdf", pdf, ct);
+
+            await _comprobantes.GuardarRutasAsync(
+                trabajo.TenantId, trabajo.Id, rutaPdf: ruta, ct: ct);
+        }
+        catch (Exception ex)
+        {
+            // Que quede registrado, pero sin tocar el estado del comprobante.
+            _log.LogError(ex,
+                "No se pudo generar el PDF de {Numero}. El comprobante NO se ve " +
+                "afectado: sigue aceptado y el PDF puede regenerarse después.",
+                comprobante.NombreArchivo);
+        }
     }
 
     private static string Describir(TimeSpan espera) =>
