@@ -1,11 +1,12 @@
 using System.Security.Cryptography.X509Certificates;
-using System.Xml.Linq;
 using Facturacion.Cpe;
 
 // ---------------------------------------------------------------------------
-// Prueba dos casos nuevos contra SUNAT:
-//   1. Factura con descuento por línea
-//   2. Factura en dólares con tipo de cambio
+// Emite una factura, la envía, y después CONSULTA su estado a SUNAT.
+//
+// El caso real que esto resuelve: el envío llega pero la respuesta se pierde
+// por un corte de red. Sin consultar, no sabes si el comprobante existe.
+// Reenviarlo crearía un duplicado; no reenviarlo dejaría la venta sin facturar.
 // ---------------------------------------------------------------------------
 
 const string RutaCertificado = "certificado.pfx";
@@ -24,14 +25,6 @@ var emisor = new Emisor
     Departamento = "LIMA"
 };
 
-var receptor = new Receptor
-{
-    TipoDocumento = TipoDocIdentidad.Ruc,
-    NumeroDocumento = "20512345678",
-    RazonSocial = "CLIENTE DE PRUEBA SAC",
-    Direccion = "JR. CLIENTE 456"
-};
-
 var carpetaSalida = Path.Combine(AppContext.BaseDirectory, "salida");
 Directory.CreateDirectory(carpetaSalida);
 
@@ -47,192 +40,50 @@ var certificado = new X509Certificate2(
     rutaPfx, ClaveCertificado,
     X509KeyStorageFlags.Exportable | X509KeyStorageFlags.MachineKeySet);
 
-using var enviador = new EnviadorSunatSoap(ConfiguracionSunat.Beta(RucEmisor));
+var configuracion = ConfiguracionSunat.Beta(RucEmisor);
 
-// --- Caso 1: factura con descuento por línea -------------------------------
+// --- 1. Emitir una factura -------------------------------------------------
 
-var conDescuento = new Factura
+var factura = new Factura
 {
     Serie = "F001",
-    Correlativo = 20,
+    Correlativo = 30,
     FechaEmision = DateTime.Now,
     Emisor = emisor,
-    Receptor = receptor,
-    Lineas =
-    [
-        new LineaComprobante
-        {
-            Numero = 1,
-            CodigoProducto = "P001",
-            Descripcion = "PRODUCTO CON DESCUENTO",
-            Cantidad = 2,
-            ValorUnitario = 50.00m,
-            DescuentoPorcentaje = 10m
-        },
-        new LineaComprobante
-        {
-            Numero = 2,
-            CodigoProducto = "P002",
-            Descripcion = "PRODUCTO SIN DESCUENTO",
-            Cantidad = 1,
-            ValorUnitario = 30.00m
-        }
-    ]
-};
-
-await Emitir("FACTURA CON DESCUENTO", conDescuento);
-
-// --- Caso 2: factura con descuento global ----------------------------------
-
-var conDescuentoGlobal = new Factura
-{
-    Serie = "F001",
-    Correlativo = 22,
-    FechaEmision = DateTime.Now,
-    DescuentoGlobalPorcentaje = 5m,
-    Emisor = emisor,
-    Receptor = receptor,
-    Lineas =
-    [
-        new LineaComprobante
-        {
-            Numero = 1,
-            CodigoProducto = "P001",
-            Descripcion = "PRODUCTO A",
-            Cantidad = 1,
-            ValorUnitario = 100.00m
-        },
-        new LineaComprobante
-        {
-            Numero = 2,
-            CodigoProducto = "P002",
-            Descripcion = "PRODUCTO B",
-            Cantidad = 1,
-            ValorUnitario = 20.00m
-        }
-    ]
-};
-
-await Emitir("FACTURA CON DESCUENTO GLOBAL", conDescuentoGlobal);
-
-// --- Caso 3: descuento de linea mas descuento global -----------------------
-
-var conAmbos = new Factura
-{
-    Serie = "F001",
-    Correlativo = 23,
-    FechaEmision = DateTime.Now,
-    DescuentoGlobalPorcentaje = 10m,
-    Emisor = emisor,
-    Receptor = receptor,
-    Lineas =
-    [
-        new LineaComprobante
-        {
-            Numero = 1,
-            CodigoProducto = "P001",
-            Descripcion = "PRODUCTO CON AMBOS DESCUENTOS",
-            Cantidad = 2,
-            ValorUnitario = 50.00m,
-            DescuentoPorcentaje = 10m
-        }
-    ]
-};
-
-await Emitir("DESCUENTO DE LINEA MAS GLOBAL", conAmbos);
-
-// --- Caso 4: factura en dólares --------------------------------------------
-
-var enDolares = new Factura
-{
-    Serie = "F001",
-    Correlativo = 24,
-    FechaEmision = DateTime.Now,
-    Moneda = "USD",
-    TipoCambio = new TipoCambio
+    Receptor = new Receptor
     {
-        MonedaOrigen = "USD",
-        MonedaDestino = "PEN",
-        Tasa = 3.752m,
-        Fecha = DateTime.Today
+        TipoDocumento = TipoDocIdentidad.Ruc,
+        NumeroDocumento = "20512345678",
+        RazonSocial = "CLIENTE DE PRUEBA SAC",
+        Direccion = "JR. CLIENTE 456"
     },
-    Emisor = emisor,
-    Receptor = receptor,
     Lineas =
     [
         new LineaComprobante
         {
             Numero = 1,
-            CodigoProducto = "P003",
-            Descripcion = "SERVICIO DE CONSULTORIA",
-            UnidadMedida = "ZZ",
-            Cantidad = 1,
-            ValorUnitario = 500.00m
+            CodigoProducto = "P001",
+            Descripcion = "PRODUCTO DE PRUEBA",
+            Cantidad = 2,
+            ValorUnitario = 50.00m
         }
     ]
 };
 
-await Emitir("FACTURA EN DOLARES", enDolares);
+Console.WriteLine(new string('=', 60));
+Console.WriteLine($"EMISIÓN: {factura.NombreArchivo}");
+Console.WriteLine(new string('=', 60));
 
-Console.WriteLine();
-Console.WriteLine($"Todo en: {carpetaSalida}");
+var firmado = FirmadorXml.Firmar(
+    GeneradorFacturaXml.Generar(factura), certificado);
 
-// ---------------------------------------------------------------------------
+var rutaXml = Path.Combine(carpetaSalida, $"{factura.NombreArchivo}.xml");
+FirmadorXml.Guardar(firmado, rutaXml);
 
-async Task Emitir(string titulo, Factura factura)
+var zip = EmpaquetadorZip.ComprimirDesdeArchivo(rutaXml);
+
+using (var enviador = new EnviadorSunatSoap(configuracion))
 {
-    Console.WriteLine();
-    Console.WriteLine(new string('=', 60));
-    Console.WriteLine($"{titulo}: {factura.NombreArchivo}");
-    Console.WriteLine(new string('=', 60));
-
-    var t = CalculadoraTotales.Calcular(factura);
-
-    Console.WriteLine($"Valor venta   : {NumeroALetras.F2(t.ValorVenta)}");
-
-    if (t.TotalDescuentos > 0)
-        Console.WriteLine($"Descuentos    : {NumeroALetras.F2(t.TotalDescuentos)}");
-
-    Console.WriteLine($"Base IGV      : {NumeroALetras.F2(t.TotalGravado)}");
-    Console.WriteLine($"IGV           : {NumeroALetras.F2(t.TotalIgv)}");
-    Console.WriteLine($"Total         : {NumeroALetras.F2(t.ImporteTotal)} {factura.Moneda}");
-    Console.WriteLine($"Leyenda       : {NumeroALetras.Leyenda(t.ImporteTotal, factura.Moneda)}");
-
-    var firmado = FirmadorXml.Firmar(
-        GeneradorFacturaXml.Generar(factura), certificado);
-
-    var rutaXml = Path.Combine(carpetaSalida, $"{factura.NombreArchivo}.xml");
-    FirmadorXml.Guardar(firmado, rutaXml);
-
-    // Validar en local antes de enviar: es gratis y el mensaje es más claro.
-    var rutaXsd = Path.Combine(
-        AppContext.BaseDirectory, "xsd", "maindoc", "UBL-Invoice-2.1.xsd");
-
-    if (File.Exists(rutaXsd))
-    {
-        var validacion = new ValidadorXsd(rutaXsd).Validar(XDocument.Load(rutaXml));
-
-        if (!validacion.Valido)
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"XSD: NO válido. {validacion.Errores.Count} problema(s):");
-            Console.ResetColor();
-
-            foreach (var error in validacion.Errores)
-                Console.WriteLine("  " + error);
-
-            return;
-        }
-
-        Console.WriteLine("XSD           : válido");
-    }
-
-    var zip = EmpaquetadorZip.ComprimirDesdeArchivo(rutaXml);
-    File.WriteAllBytes(
-        Path.Combine(carpetaSalida, $"{factura.NombreArchivo}.zip"), zip);
-
-    Console.WriteLine("Enviando a SUNAT beta...");
-
     var envio = await enviador.EnviarAsync($"{factura.NombreArchivo}.zip", zip);
 
     Console.ForegroundColor = envio.Aceptado ? ConsoleColor.Green : ConsoleColor.Red;
@@ -241,17 +92,67 @@ async Task Emitir(string titulo, Factura factura)
 
     Console.WriteLine($"Código        : {envio.CodigoRespuesta}");
     Console.WriteLine($"Descripción   : {envio.Descripcion}");
-
-    foreach (var obs in envio.Observaciones)
-        Console.WriteLine($"  Observación : {obs}");
-
-    if (envio.CdrZip is not null)
-    {
-        var nombreCdr = LectorCdr.NombreArchivoCdr(factura.NombreArchivo);
-
-        File.WriteAllBytes(
-            Path.Combine(carpetaSalida, $"{nombreCdr}.zip"), envio.CdrZip);
-        File.WriteAllBytes(
-            Path.Combine(carpetaSalida, $"{nombreCdr}.xml"), envio.CdrXml!);
-    }
 }
+
+// --- 2. Consultar el comprobante recién emitido ----------------------------
+// Se simula que el CDR se perdió: se pregunta a SUNAT si tiene el documento
+// y se recupera la constancia desde cero.
+
+Console.WriteLine();
+Console.WriteLine(new string('=', 60));
+Console.WriteLine("CONSULTA DE ESTADO");
+Console.WriteLine(new string('=', 60));
+Console.WriteLine($"Preguntando por {factura.Serie}-{factura.Correlativo}...");
+Console.WriteLine();
+
+using var consultor = new ConsultorCpeSunat(configuracion);
+
+var estado = await consultor.ConsultarAsync(
+    ruc: RucEmisor,
+    tipoComprobante: factura.TipoComprobante,
+    serie: factura.Serie,
+    numero: factura.Correlativo);
+
+Console.WriteLine($"Código        : {estado.Codigo}");
+Console.WriteLine($"Mensaje       : {estado.Mensaje}");
+Console.WriteLine($"Existe        : {(estado.Existe ? "sí" : "no")}");
+Console.WriteLine($"Aceptado      : {(estado.Aceptado ? "sí" : "no")}");
+
+if (estado.CdrZip is not null)
+{
+    var nombre = $"RECUPERADO-{LectorCdr.NombreArchivoCdr(factura.NombreArchivo)}";
+
+    File.WriteAllBytes(
+        Path.Combine(carpetaSalida, $"{nombre}.zip"), estado.CdrZip);
+    File.WriteAllBytes(
+        Path.Combine(carpetaSalida, $"{nombre}.xml"), estado.CdrXml!);
+
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.WriteLine($"CDR recuperado: {nombre}.xml");
+    Console.ResetColor();
+}
+else
+{
+    Console.WriteLine("SUNAT no devolvió el CDR en la consulta.");
+}
+
+// --- 3. Consultar un comprobante que no existe -----------------------------
+// Para ver cómo responde SUNAT en el caso negativo, que es justo el que
+// necesitas distinguir bien antes de decidir si reenviar.
+
+Console.WriteLine();
+Console.WriteLine("Preguntando por un comprobante inexistente (F999-99999)...");
+Console.WriteLine();
+
+var inexistente = await consultor.ConsultarAsync(
+    ruc: RucEmisor,
+    tipoComprobante: TipoComprobante.Factura,
+    serie: "F999",
+    numero: 99999);
+
+Console.WriteLine($"Código        : {inexistente.Codigo}");
+Console.WriteLine($"Mensaje       : {inexistente.Mensaje}");
+Console.WriteLine($"Existe        : {(inexistente.Existe ? "sí" : "no")}");
+
+Console.WriteLine();
+Console.WriteLine($"Todo en: {carpetaSalida}");
