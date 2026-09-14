@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estado del servicio de facturación</title>
+<style>
+  :root {
+    --fondo: #0f1115;
+    --panel: #171a21;
+    --borde: #262b36;
+    --texto: #e6e8ec;
+    --tenue: #8b93a3;
+    --sano: #3fb950;
+    --atencion: #d29922;
+    --problema: #f85149;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--fondo);
+    color: var(--texto);
+    font: 15px/1.55 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  }
+
+  .contenedor { max-width: 1000px; margin: 0 auto; }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+
+  h1 { font-size: 19px; margin: 0; font-weight: 600; }
+
+  .controles { display: flex; gap: 8px; align-items: center; }
+
+  input, button {
+    background: var(--panel);
+    border: 1px solid var(--borde);
+    color: var(--texto);
+    padding: 7px 11px;
+    border-radius: 7px;
+    font: inherit;
+    font-size: 14px;
+  }
+
+  button { cursor: pointer; }
+  button:hover { border-color: #3a4152; }
+
+  .semaforo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 18px;
+    border-radius: 10px;
+    border: 1px solid var(--borde);
+    background: var(--panel);
+    margin-bottom: 18px;
+  }
+
+  .punto { width: 13px; height: 13px; border-radius: 50%; flex: none; }
+  .Sano     .punto { background: var(--sano); }
+  .Atencion .punto { background: var(--atencion); }
+  .Problema .punto { background: var(--problema); }
+
+  .Sano     .etiqueta { color: var(--sano); }
+  .Atencion .etiqueta { color: var(--atencion); }
+  .Problema .etiqueta { color: var(--problema); }
+
+  .etiqueta { font-weight: 600; letter-spacing: .02em; }
+
+  .alertas { margin: 0; padding-left: 20px; }
+  .alertas li { margin: 5px 0; }
+
+  .tarjetas {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .tarjeta {
+    background: var(--panel);
+    border: 1px solid var(--borde);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+
+  .tarjeta .valor { font-size: 26px; font-weight: 600; }
+  .tarjeta .nombre { color: var(--tenue); font-size: 13px; margin-top: 2px; }
+
+  section {
+    background: var(--panel);
+    border: 1px solid var(--borde);
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-bottom: 14px;
+  }
+
+  h2 { font-size: 14px; margin: 0 0 12px; color: var(--tenue);
+       text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; color: var(--tenue); font-weight: 500;
+       padding: 6px 8px; border-bottom: 1px solid var(--borde); }
+  td { padding: 8px; border-bottom: 1px solid #1d222c; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+
+  .mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+          font-size: 13px; }
+
+  .recorte { max-width: 420px; overflow: hidden;
+             text-overflow: ellipsis; white-space: nowrap; }
+
+  .vacio { color: var(--tenue); font-style: italic; }
+
+  .aviso { color: var(--problema); }
+
+  footer { color: var(--tenue); font-size: 13px; margin-top: 18px; }
+</style>
+</head>
+<body>
+<div class="contenedor">
+
+  <header>
+    <h1>Estado del servicio de facturación</h1>
+    <div class="controles">
+      <input id="clave" type="password" placeholder="Clave de operador" size="22">
+      <button id="actualizar">Actualizar</button>
+    </div>
+  </header>
+
+  <div id="contenido">
+    <section class="vacio">Introduce la clave de operador y pulsa Actualizar.</section>
+  </div>
+
+  <footer id="pie"></footer>
+</div>
+
+<script>
+// Panel de una sola página, sin dependencias externas.
+// La clave se guarda solo en esta pestaña: al cerrarla, desaparece.
+
+const $ = id => document.getElementById(id);
+
+const clave = $("clave");
+clave.value = sessionStorage.getItem("claveOperador") || "";
+
+$("actualizar").onclick = cargar;
+clave.onkeydown = e => { if (e.key === "Enter") cargar(); };
+
+async function cargar() {
+  sessionStorage.setItem("claveOperador", clave.value);
+
+  try {
+    const respuesta = await fetch("/admin/salud", {
+      headers: { "X-Admin-Key": clave.value }
+    });
+
+    if (respuesta.status === 401) {
+      $("contenido").innerHTML =
+        `<section class="aviso">Clave de operador no válida.</section>`;
+      return;
+    }
+
+    if (!respuesta.ok) {
+      $("contenido").innerHTML =
+        `<section class="aviso">El servicio respondió ${respuesta.status}.</section>`;
+      return;
+    }
+
+    pintar(await respuesta.json());
+
+    $("pie").textContent =
+      "Última consulta: " + new Date().toLocaleTimeString("es-PE");
+
+  } catch (error) {
+    $("contenido").innerHTML =
+      `<section class="aviso">No se pudo contactar el servicio: ${error.message}</section>`;
+  }
+}
+
+function pintar(d) {
+  const partes = [];
+
+  partes.push(`
+    <div class="semaforo ${d.nivel}">
+      <span class="punto"></span>
+      <div>
+        <div class="etiqueta">${textoNivel(d.nivel)}</div>
+        <ul class="alertas">${d.alertas.map(a => `<li>${escapar(a)}</li>`).join("")}</ul>
+      </div>
+    </div>`);
+
+  partes.push(`
+    <div class="tarjetas">
+      ${tarjeta(d.cola.pendientes, "En cola")}
+      ${tarjeta(d.cola.esperandoReintento, "Esperando reintento")}
+      ${tarjeta(d.cola.requierenRevision, "Requieren revisión")}
+      ${tarjeta(d.hoy.aceptados, "Aceptados hoy")}
+      ${tarjeta(d.hoy.rechazados, "Rechazados hoy")}
+      ${tarjeta(d.hoy.tasaExito + "%", "Tasa de éxito")}
+    </div>`);
+
+  if (d.certificados.length) {
+    partes.push(seccion("Certificados", `
+      <table>
+        <tr><th>Empresa</th><th>Vence</th><th>Días</th></tr>
+        ${d.certificados.map(c => `
+          <tr>
+            <td>${escapar(c.razonSocial)} <span class="mono">${c.ruc}</span></td>
+            <td class="mono">${c.validoHasta.slice(0, 10)}</td>
+            <td class="${c.diasRestantes <= 30 ? "aviso" : ""}">${c.diasRestantes}</td>
+          </tr>`).join("")}
+      </table>`));
+  }
+
+  if (d.erroresFrecuentes.length) {
+    partes.push(seccion("Errores más frecuentes (24 h)", `
+      <table>
+        <tr><th>Código</th><th>Veces</th><th>Mensaje</th></tr>
+        ${d.erroresFrecuentes.map(e => `
+          <tr>
+            <td class="mono">${escapar(e.codigoSunat ?? "—")}</td>
+            <td>${e.veces}</td>
+            <td class="recorte" title="${escapar(e.mensaje ?? "")}">${escapar(e.mensaje ?? "")}</td>
+          </tr>`).join("")}
+      </table>`));
+  }
+
+  if (d.atascados.length) {
+    partes.push(seccion("Comprobantes con problemas", `
+      <table>
+        <tr><th>Número</th><th>Estado</th><th>Fallos</th><th>Mensaje</th><th></th></tr>
+        ${d.atascados.map(c => `
+          <tr>
+            <td class="mono">${escapar(c.numero)}</td>
+            <td>${escapar(c.estado)}</td>
+            <td>${c.intentosFallidos}</td>
+            <td class="recorte" title="${escapar(c.ultimoMensaje ?? "")}">${escapar(c.ultimoMensaje ?? "—")}</td>
+            <td><button onclick="reprocesar('${c.id}')">Reprocesar</button></td>
+          </tr>`).join("")}
+      </table>`));
+  }
+
+  $("contenido").innerHTML = partes.join("");
+}
+
+async function reprocesar(id) {
+  const respuesta = await fetch(`/admin/comprobantes/${id}/reprocesar`, {
+    method: "POST",
+    headers: { "X-Admin-Key": clave.value }
+  });
+
+  const cuerpo = await respuesta.json();
+
+  alert(respuesta.ok ? cuerpo.mensaje : (cuerpo.detalle || cuerpo.error));
+
+  cargar();
+}
+
+const tarjeta = (valor, nombre) =>
+  `<div class="tarjeta"><div class="valor">${valor}</div><div class="nombre">${nombre}</div></div>`;
+
+const seccion = (titulo, contenido) =>
+  `<section><h2>${titulo}</h2>${contenido}</section>`;
+
+const textoNivel = nivel => ({
+  Sano: "Todo en orden",
+  Atencion: "Requiere atención",
+  Problema: "Hay un problema"
+}[nivel] || nivel);
+
+const escapar = texto => String(texto ?? "").replace(/[&<>"']/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+if (clave.value) cargar();
+</script>
+</body>
+</html>

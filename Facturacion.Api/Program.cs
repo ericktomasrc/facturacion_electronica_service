@@ -13,7 +13,15 @@ var cadenaConexion = builder.Configuration.GetConnectionString("Facturacion")
     ?? throw new InvalidOperationException(
         "Falta la cadena de conexión 'Facturacion' en appsettings.json.");
 
+// El diagnóstico mira TODAS las empresas, así que usa el rol de operador.
+// Es una vista de infraestructura, no de cliente, y por eso su endpoint
+// está protegido con una clave distinta.
+var cadenaOperador = builder.Configuration.GetConnectionString("FacturacionOperador")
+    ?? throw new InvalidOperationException(
+        "Falta la cadena 'FacturacionOperador' en appsettings.json.");
+
 builder.Services.AddSingleton(new FabricaSesiones(cadenaConexion));
+builder.Services.AddSingleton(new RepositorioDiagnostico(cadenaOperador));
 builder.Services.AddSingleton<RepositorioTenants>();
 builder.Services.AddSingleton<RepositorioComprobantes>();
 
@@ -100,9 +108,15 @@ if (app.Environment.IsDevelopment())
     });
 }
 
+// Sirve el panel de diagnóstico desde wwwroot.
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 app.UseMiddleware<AutenticacionApiKey>();
 
 // --- Endpoints -------------------------------------------------------------
+
+app.MapearDiagnostico();
 
 app.MapGet("/health", () => Results.Ok(new { estado = "vivo" }))
    .WithName("Salud")

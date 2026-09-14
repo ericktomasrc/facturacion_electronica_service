@@ -92,7 +92,37 @@ public sealed class AutenticacionApiKey
         ruta.StartsWithSegments("/health") ||
         ruta.StartsWithSegments("/openapi") ||
         ruta.StartsWithSegments("/swagger") ||
+        ruta.StartsWithSegments("/docs") ||
+
+        // Los endpoints de operación NO son públicos: tienen su propia
+        // autenticación, con una clave distinta a la de los emisores.
+        // Una clave de emisor jamás debe abrirlos, porque muestran datos
+        // de todas las empresas.
+        ruta.StartsWithSegments("/admin") ||
+
+        EsArchivoEstatico(ruta.Value) ||
+
         ruta == "/";
+
+    /// <summary>
+    /// Los archivos del panel se sirven sin clave de emisor.
+    ///
+    /// No exponen nada: el HTML pide la clave de operador por su cuenta antes
+    /// de consultar cualquier dato. Lo que está protegido son los endpoints
+    /// que devuelven información, no la página que los llama.
+    ///
+    /// PathString no es una cadena: es un tipo propio de ASP.NET. Su
+    /// propiedad Value sí lo es, y puede ser nula.
+    /// </summary>
+    private static bool EsArchivoEstatico(string? ruta)
+    {
+        if (string.IsNullOrEmpty(ruta)) return false;
+
+        return ruta.EndsWith(".html", StringComparison.OrdinalIgnoreCase)
+            || ruta.EndsWith(".css", StringComparison.OrdinalIgnoreCase)
+            || ruta.EndsWith(".js", StringComparison.OrdinalIgnoreCase)
+            || ruta.EndsWith(".ico", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static string? LeerClave(HttpRequest peticion)
     {
