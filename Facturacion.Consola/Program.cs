@@ -1,32 +1,83 @@
-using System.Security.Cryptography.X509Certificates;
 using Facturacion.Cpe;
+using Facturacion.Persistencia;
 
 // ---------------------------------------------------------------------------
-// Emite una factura, la envía, y después CONSULTA su estado a SUNAT.
+// Demuestra el ciclo completo del almacén de certificados:
 //
-// El caso real que esto resuelve: el envío llega pero la respuesta se pierde
-// por un corte de red. Sin consultar, no sabes si el comprobante existe.
-// Reenviarlo crearía un duplicado; no reenviarlo dejaría la venta sin facturar.
+//   1. Carga el .pfx del disco
+//   2. Lo cifra y lo guarda en la base
+//   3. Lo recupera descifrado
+//   4. Firma una factura con él y verifica la firma
+//
+// El certificado nunca queda en claro en la base ni se vuelve a escribir
+// al disco.
 // ---------------------------------------------------------------------------
 
 const string RutaCertificado = "certificado.pfx";
 const string ClaveCertificado = "123456";
-const string RucEmisor = "20601234567";
 
-var emisor = new Emisor
+// El puerto es 5433 porque el 5432 ya lo ocupa otro contenedor.
+const string CadenaConexion =
+    "Host=localhost;Port=5433;Database=facturacion;" +
+    "Username=facturacion_app;Password=cambiame_en_produccion";
+
+// --- 1. La llave maestra ---------------------------------------------------
+
+if (string.IsNullOrWhiteSpace(
+        Environment.GetEnvironmentVariable(ProtectorAesGcm.VariableLlaveMaestra)))
 {
-    Ruc = RucEmisor,
-    RazonSocial = "MI EMPRESA SAC",
-    NombreComercial = "MI EMPRESA",
-    Ubigeo = "150101",
-    Direccion = "AV. EJEMPLO 123",
-    Distrito = "LIMA",
-    Provincia = "LIMA",
-    Departamento = "LIMA"
-};
+    Console.ForegroundColor = ConsoleColor.Yellow;
+    Console.WriteLine($"Falta la variable {ProtectorAesGcm.VariableLlaveMaestra}.");
+    Console.ResetColor();
+    Console.WriteLine();
+    Console.WriteLine("Genera una y guárdala FUERA del repositorio. En PowerShell:");
+    Console.WriteLine();
+    Console.WriteLine($"  $env:{ProtectorAesGcm.VariableLlaveMaestra} = \"{ProtectorAesGcm.GenerarLlaveBase64()}\"");
+    Console.WriteLine();
+    Console.WriteLine("Esa línea la define solo para la sesión actual de PowerShell.");
+    Console.WriteLine("Para que Visual Studio la vea, defínela a nivel de usuario:");
+    Console.WriteLine();
+    Console.WriteLine($"  [Environment]::SetEnvironmentVariable(\"{ProtectorAesGcm.VariableLlaveMaestra}\", \"<la llave>\", \"User\")");
+    Console.WriteLine();
+    Console.WriteLine("Y reinicia Visual Studio para que tome el cambio.");
+    Console.WriteLine();
+    Console.WriteLine("SI PIERDES ESTA LLAVE, los certificados guardados quedan");
+    Console.WriteLine("irrecuperables. No hay puerta trasera: de eso se trata.");
+    return;
+}
 
-var carpetaSalida = Path.Combine(AppContext.BaseDirectory, "salida");
-Directory.CreateDirectory(carpetaSalida);
+var protector = ProtectorAesGcm.DesdeEntorno();
+var sesiones = new FabricaSesiones(CadenaConexion);
+var almacen = new AlmacenCertificados(sesiones, protector);
+
+Console.WriteLine("Llave maestra   : cargada");
+
+// --- 2. Resolver el tenant -------------------------------------------------
+
+Guid tenantId;
+
+await using (var catalogo = await sesiones.AbrirCatalogoAsync())
+{
+    var comando = new Npgsql.NpgsqlCommand(
+        "SELECT id FROM tenants WHERE ruc = @ruc", catalogo);
+
+    comando.Parameters.AddWithValue("ruc", "20601234567");
+
+    var resultado = await comando.ExecuteScalarAsync();
+
+    if (resultado is null)
+    {
+        Console.WriteLine("No se encontró el tenant. ¿Corriste las migraciones?");
+        return;
+    }
+
+    tenantId = (Guid)resultado;
+}
+
+Console.WriteLine($"Tenant          : {tenantId}");
+Console.WriteLine();
+
+// --- 3. Guardar el certificado cifrado -------------------------------------
 
 var rutaPfx = Path.Combine(AppContext.BaseDirectory, RutaCertificado);
 
@@ -36,33 +87,87 @@ if (!File.Exists(rutaPfx))
     return;
 }
 
-var certificado = new X509Certificate2(
-    rutaPfx, ClaveCertificado,
-    X509KeyStorageFlags.Exportable | X509KeyStorageFlags.MachineKeySet);
+var contenidoPfx = await File.ReadAllBytesAsync(rutaPfx);
 
-var configuracion = ConfiguracionSunat.Beta(RucEmisor);
+Console.WriteLine("Guardando el certificado cifrado...");
 
-// --- 1. Emitir una factura -------------------------------------------------
+var certificadoId = await almacen.GuardarAsync(
+    tenantId, contenidoPfx, ClaveCertificado);
+
+Console.WriteLine($"Guardado con id : {certificadoId}");
+Console.WriteLine();
+
+// --- 4. Verificar que en la base NO está en claro --------------------------
+
+await using (var sesion = await sesiones.AbrirAsync(tenantId))
+{
+    var comando = new Npgsql.NpgsqlCommand(
+        "SELECT pfx_cifrado FROM certificados WHERE id = @id",
+        sesion.Conexion, sesion.Transaccion);
+
+    comando.Parameters.AddWithValue("id", certificadoId);
+
+    var cifrado = (byte[])(await comando.ExecuteScalarAsync())!;
+
+    // Un PFX real empieza con la secuencia DER 0x30 0x82.
+    // Si lo guardado empezara así, no estaría cifrado.
+    var pareceUnPfxEnClaro = cifrado.Length > 2 && cifrado[0] == 0x30 && cifrado[1] == 0x82;
+
+    Console.ForegroundColor = pareceUnPfxEnClaro ? ConsoleColor.Red : ConsoleColor.Green;
+    Console.WriteLine(pareceUnPfxEnClaro
+        ? "PROBLEMA: el certificado parece estar guardado EN CLARO."
+        : "En la base : cifrado, no se reconoce como PFX");
+    Console.ResetColor();
+
+    Console.WriteLine($"Original   : {contenidoPfx.Length:N0} bytes");
+    Console.WriteLine($"Cifrado    : {cifrado.Length:N0} bytes (28 más: nonce y tag)");
+
+    await sesion.ConfirmarAsync();
+}
+
+Console.WriteLine();
+
+// --- 5. Recuperarlo y firmar con él ----------------------------------------
+
+Console.WriteLine("Recuperando el certificado desde la base...");
+
+using var certificado = await almacen.ObtenerActivoAsync(tenantId);
+
+if (certificado is null)
+{
+    Console.WriteLine("No hay certificado activo para este tenant.");
+    return;
+}
+
+Console.WriteLine($"Subject         : {certificado.Subject}");
+Console.WriteLine($"Llave privada   : {(certificado.HasPrivateKey ? "sí" : "NO")}");
+Console.WriteLine();
 
 var factura = new Factura
 {
     Serie = "F001",
-    Correlativo = 30,
+    Correlativo = 40,
     FechaEmision = DateTime.Now,
-    Emisor = emisor,
+    Emisor = new Emisor
+    {
+        Ruc = "20601234567",
+        RazonSocial = "MI EMPRESA SAC",
+        Direccion = "AV. EJEMPLO 123",
+        Distrito = "LIMA",
+        Provincia = "LIMA",
+        Departamento = "LIMA"
+    },
     Receptor = new Receptor
     {
         TipoDocumento = TipoDocIdentidad.Ruc,
         NumeroDocumento = "20512345678",
-        RazonSocial = "CLIENTE DE PRUEBA SAC",
-        Direccion = "JR. CLIENTE 456"
+        RazonSocial = "CLIENTE DE PRUEBA SAC"
     },
     Lineas =
     [
         new LineaComprobante
         {
             Numero = 1,
-            CodigoProducto = "P001",
             Descripcion = "PRODUCTO DE PRUEBA",
             Cantidad = 2,
             ValorUnitario = 50.00m
@@ -70,89 +175,29 @@ var factura = new Factura
     ]
 };
 
-Console.WriteLine(new string('=', 60));
-Console.WriteLine($"EMISIÓN: {factura.NombreArchivo}");
-Console.WriteLine(new string('=', 60));
-
 var firmado = FirmadorXml.Firmar(
     GeneradorFacturaXml.Generar(factura), certificado);
 
-var rutaXml = Path.Combine(carpetaSalida, $"{factura.NombreArchivo}.xml");
-FirmadorXml.Guardar(firmado, rutaXml);
+Console.ForegroundColor = ConsoleColor.Green;
+Console.WriteLine("Factura firmada con el certificado recuperado de la base.");
+Console.ResetColor();
 
-var zip = EmpaquetadorZip.ComprimirDesdeArchivo(rutaXml);
+// --- 6. Listar los certificados del tenant ---------------------------------
 
-using (var enviador = new EnviadorSunatSoap(configuracion))
+Console.WriteLine();
+Console.WriteLine("Certificados del tenant:");
+
+foreach (var info in await almacen.ListarAsync(tenantId))
 {
-    var envio = await enviador.EnviarAsync($"{factura.NombreArchivo}.zip", zip);
+    var marca = info.Activo ? "activo " : "inactivo";
+    Console.WriteLine(
+        $"  [{marca}] {info.Subject}  vence {info.ValidoHasta:yyyy-MM-dd}  " +
+        $"({info.DiasParaVencer} días)");
 
-    Console.ForegroundColor = envio.Aceptado ? ConsoleColor.Green : ConsoleColor.Red;
-    Console.WriteLine(envio.Aceptado ? "ACEPTADA" : "RECHAZADA");
-    Console.ResetColor();
-
-    Console.WriteLine($"Código        : {envio.CodigoRespuesta}");
-    Console.WriteLine($"Descripción   : {envio.Descripcion}");
+    if (info.RequiereAlerta())
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("            ATENCIÓN: vence pronto. Hay que renovarlo.");
+        Console.ResetColor();
+    }
 }
-
-// --- 2. Consultar el comprobante recién emitido ----------------------------
-// Se simula que el CDR se perdió: se pregunta a SUNAT si tiene el documento
-// y se recupera la constancia desde cero.
-
-Console.WriteLine();
-Console.WriteLine(new string('=', 60));
-Console.WriteLine("CONSULTA DE ESTADO");
-Console.WriteLine(new string('=', 60));
-Console.WriteLine($"Preguntando por {factura.Serie}-{factura.Correlativo}...");
-Console.WriteLine();
-
-using var consultor = new ConsultorCpeSunat(configuracion);
-
-var estado = await consultor.ConsultarAsync(
-    ruc: RucEmisor,
-    tipoComprobante: factura.TipoComprobante,
-    serie: factura.Serie,
-    numero: factura.Correlativo);
-
-Console.WriteLine($"Código        : {estado.Codigo}");
-Console.WriteLine($"Mensaje       : {estado.Mensaje}");
-Console.WriteLine($"Existe        : {(estado.Existe ? "sí" : "no")}");
-Console.WriteLine($"Aceptado      : {(estado.Aceptado ? "sí" : "no")}");
-
-if (estado.CdrZip is not null)
-{
-    var nombre = $"RECUPERADO-{LectorCdr.NombreArchivoCdr(factura.NombreArchivo)}";
-
-    File.WriteAllBytes(
-        Path.Combine(carpetaSalida, $"{nombre}.zip"), estado.CdrZip);
-    File.WriteAllBytes(
-        Path.Combine(carpetaSalida, $"{nombre}.xml"), estado.CdrXml!);
-
-    Console.ForegroundColor = ConsoleColor.Green;
-    Console.WriteLine($"CDR recuperado: {nombre}.xml");
-    Console.ResetColor();
-}
-else
-{
-    Console.WriteLine("SUNAT no devolvió el CDR en la consulta.");
-}
-
-// --- 3. Consultar un comprobante que no existe -----------------------------
-// Para ver cómo responde SUNAT en el caso negativo, que es justo el que
-// necesitas distinguir bien antes de decidir si reenviar.
-
-Console.WriteLine();
-Console.WriteLine("Preguntando por un comprobante inexistente (F999-99999)...");
-Console.WriteLine();
-
-var inexistente = await consultor.ConsultarAsync(
-    ruc: RucEmisor,
-    tipoComprobante: TipoComprobante.Factura,
-    serie: "F999",
-    numero: 99999);
-
-Console.WriteLine($"Código        : {inexistente.Codigo}");
-Console.WriteLine($"Mensaje       : {inexistente.Mensaje}");
-Console.WriteLine($"Existe        : {(inexistente.Existe ? "sí" : "no")}");
-
-Console.WriteLine();
-Console.WriteLine($"Todo en: {carpetaSalida}");

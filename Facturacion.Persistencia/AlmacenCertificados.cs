@@ -1,0 +1,194 @@
+using System.Security.Cryptography.X509Certificates;
+using Dapper;
+
+namespace Facturacion.Persistencia;
+
+/// <summary>Datos legibles de un certificado, para mostrar en el panel.</summary>
+public record CertificadoInfo(
+    Guid Id,
+    string Subject,
+    string Huella,
+    DateTime? ValidoDesde,
+    DateTime ValidoHasta,
+    bool Activo)
+{
+    public bool EstaVencido => ValidoHasta < DateTime.UtcNow;
+
+    public int DiasParaVencer =>
+        (int)Math.Ceiling((ValidoHasta - DateTime.UtcNow).TotalDays);
+
+    /// <summary>
+    /// Un certificado vencido detiene por completo la facturación del cliente,
+    /// y el aviso nunca llega solo. Conviene alertar con semanas de margen:
+    /// renovar uno toma días, no horas.
+    /// </summary>
+    public bool RequiereAlerta(int diasDeAviso = 30) =>
+        Activo && DiasParaVencer <= diasDeAviso;
+}
+
+/// <summary>
+/// Guarda y recupera los certificados digitales de cada empresa.
+///
+/// EL CERTIFICADO ES LA LLAVE CON LA QUE SE FIRMA EN NOMBRE DE OTRO. Por eso
+/// aquí nunca aparece en claro: entra cifrado, sale descifrado solo en memoria
+/// y solo cuando hay que firmar, y jamás se escribe a disco.
+///
+/// El esquema garantiza además que haya un único certificado activo por
+/// empresa. Dos activos significarían que nadie sabe con cuál se está firmando.
+/// </summary>
+public sealed class AlmacenCertificados
+{
+    private readonly FabricaSesiones _sesiones;
+    private readonly IProtectorDeSecretos _protector;
+
+    public AlmacenCertificados(FabricaSesiones sesiones, IProtectorDeSecretos protector)
+    {
+        _sesiones = sesiones ?? throw new ArgumentNullException(nameof(sesiones));
+        _protector = protector ?? throw new ArgumentNullException(nameof(protector));
+    }
+
+    /// <summary>
+    /// Guarda un certificado y lo deja como el activo del tenant.
+    ///
+    /// Desactiva el anterior en la misma transacción: el esquema no admite dos
+    /// activos, y hacerlo en pasos separados dejaría una ventana donde el
+    /// cliente no tiene ninguno.
+    /// </summary>
+    public async Task<Guid> GuardarAsync(
+        Guid tenantId,
+        byte[] contenidoPfx,
+        string clavePfx,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(contenidoPfx);
+
+        // Se abre aquí para extraer los datos legibles y, de paso, verificar
+        // que el archivo y la clave son correctos ANTES de guardar nada.
+        using var certificado = AbrirPfx(contenidoPfx, clavePfx);
+
+        if (!certificado.HasPrivateKey)
+            throw new InvalidOperationException(
+                "El archivo no contiene la llave privada. Sin ella no se puede " +
+                "firmar: necesitas el .pfx completo, no solo el certificado público.");
+
+        if (certificado.NotAfter < DateTime.Now)
+            throw new InvalidOperationException(
+                $"El certificado venció el {certificado.NotAfter:yyyy-MM-dd}. " +
+                "SUNAT rechaza todo lo firmado con un certificado vencido.");
+
+        var pfxCifrado = _protector.Proteger(contenidoPfx);
+        var claveCifrada = _protector.ProtegerTexto(clavePfx);
+
+        await using var sesion = await _sesiones.AbrirAsync(tenantId, ct);
+
+        await sesion.Conexion.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE certificados
+               SET activo = false
+             WHERE tenant_id = @tenantId AND activo
+            """,
+            new { tenantId },
+            sesion.Transaccion, cancellationToken: ct));
+
+        var id = await sesion.Conexion.ExecuteScalarAsync<Guid>(new CommandDefinition(
+            """
+            INSERT INTO certificados
+                (tenant_id, pfx_cifrado, clave_cifrada, subject, huella,
+                 valido_desde, valido_hasta, activo)
+            VALUES
+                (@tenantId, @pfxCifrado, @claveCifrada, @subject, @huella,
+                 @validoDesde, @validoHasta, true)
+            RETURNING id
+            """,
+            new
+            {
+                tenantId,
+                pfxCifrado,
+                claveCifrada,
+                subject = certificado.Subject,
+                huella = certificado.Thumbprint,
+                validoDesde = certificado.NotBefore.ToUniversalTime(),
+                validoHasta = certificado.NotAfter.ToUniversalTime()
+            },
+            sesion.Transaccion, cancellationToken: ct));
+
+        await sesion.ConfirmarAsync(ct);
+
+        return id;
+    }
+
+    /// <summary>
+    /// Recupera el certificado activo del tenant, listo para firmar.
+    ///
+    /// Quien lo reciba es responsable de liberarlo. Contiene material
+    /// criptográfico sensible y no debe quedar vivo más de lo necesario.
+    /// </summary>
+    public async Task<X509Certificate2?> ObtenerActivoAsync(
+        Guid tenantId, CancellationToken ct = default)
+    {
+        await using var sesion = await _sesiones.AbrirAsync(tenantId, ct);
+
+        var fila = await sesion.Conexion.QuerySingleOrDefaultAsync<(byte[] Pfx, byte[] Clave)?>(
+            new CommandDefinition(
+                """
+                SELECT pfx_cifrado AS "Pfx", clave_cifrada AS "Clave"
+                  FROM certificados
+                 WHERE tenant_id = @tenantId AND activo
+                 LIMIT 1
+                """,
+                new { tenantId },
+                sesion.Transaccion, cancellationToken: ct));
+
+        await sesion.ConfirmarAsync(ct);
+
+        if (fila is null) return null;
+
+        var pfx = _protector.Desproteger(fila.Value.Pfx);
+        var clave = _protector.DesprotegerTexto(fila.Value.Clave);
+
+        return AbrirPfx(pfx, clave);
+    }
+
+    /// <summary>Lista los certificados del tenant, sin material sensible.</summary>
+    public async Task<IReadOnlyList<CertificadoInfo>> ListarAsync(
+        Guid tenantId, CancellationToken ct = default)
+    {
+        await using var sesion = await _sesiones.AbrirAsync(tenantId, ct);
+
+        var filas = await sesion.Conexion.QueryAsync<CertificadoInfo>(
+            new CommandDefinition(
+                """
+                SELECT id           AS "Id",
+                       subject      AS "Subject",
+                       huella       AS "Huella",
+                       valido_desde AS "ValidoDesde",
+                       valido_hasta AS "ValidoHasta",
+                       activo       AS "Activo"
+                  FROM certificados
+                 WHERE tenant_id = @tenantId
+                 ORDER BY creado_en DESC
+                """,
+                new { tenantId },
+                sesion.Transaccion, cancellationToken: ct));
+
+        await sesion.ConfirmarAsync(ct);
+
+        return filas.ToList();
+    }
+
+    private static X509Certificate2 AbrirPfx(byte[] contenido, string clave)
+    {
+        try
+        {
+            return new X509Certificate2(
+                contenido, clave,
+                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.MachineKeySet);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "No se pudo abrir el certificado. Revisa que el archivo sea un " +
+                "PFX válido y que la contraseña sea la correcta.", ex);
+        }
+    }
+}

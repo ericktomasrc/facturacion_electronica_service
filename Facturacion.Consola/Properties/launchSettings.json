@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Facturacion.Consola": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "FACTURACION_LLAVE_MAESTRA": "1+QZmOPbcU8iTb4QufsvtBaoorHh2uSwSdTtYg68VIw="
+      }
+    }
+  }
+}
