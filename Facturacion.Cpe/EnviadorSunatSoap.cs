@@ -54,12 +54,12 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
             new XElement("fileName", nombreArchivo),
             new XElement("contentFile", Convert.ToBase64String(contenidoZip)));
 
-        var (exito, respuesta, error) = await PostAsync(cuerpo, ct);
+        var (exito, respuesta, error, codigoHttp) = await PostAsync(cuerpo, ct);
 
         if (!exito)
             return ResultadoEnvio.FalloDeRed(error!);
 
-        return InterpretarSendBill(respuesta!);
+        return InterpretarSendBill(respuesta!, codigoHttp);
     }
 
     // ----------------------------------------------------------- flujo asíncrono
@@ -77,12 +77,12 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
             new XElement("fileName", nombreArchivo),
             new XElement("contentFile", Convert.ToBase64String(contenidoZip)));
 
-        var (exito, respuesta, error) = await PostAsync(cuerpo, ct);
+        var (exito, respuesta, error, codigoHttp) = await PostAsync(cuerpo, ct);
 
         if (!exito)
             return ResultadoTicket.Fallo(error!, reintentable: true);
 
-        return InterpretarSendSummary(respuesta!);
+        return InterpretarSendSummary(respuesta!, codigoHttp);
     }
 
     /// <summary>
@@ -98,12 +98,12 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
         var cuerpo = new XElement(Servicio + "getStatus",
             new XElement("ticket", ticket));
 
-        var (exito, respuesta, error) = await PostAsync(cuerpo, ct);
+        var (exito, respuesta, error, codigoHttp) = await PostAsync(cuerpo, ct);
 
         if (!exito)
             return ResultadoEnvio.FalloDeRed(error!);
 
-        return InterpretarGetStatus(respuesta!);
+        return InterpretarGetStatus(respuesta!, codigoHttp);
     }
 
     /// <summary>
@@ -142,7 +142,7 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
 
     // ------------------------------------------------------------------ interno
 
-    private async Task<(bool Exito, string? Respuesta, string? Error)> PostAsync(
+    private async Task<(bool Exito, string? Respuesta, string? Error, int CodigoHttp)> PostAsync(
         XElement cuerpoSoap,
         CancellationToken ct)
     {
@@ -166,16 +166,16 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
             var respuesta = await _http.SendAsync(peticion, ct);
             var texto = await respuesta.Content.ReadAsStringAsync(ct);
 
-            return (true, texto, null);
+            return (true, texto, null, (int)respuesta.StatusCode);
         }
         catch (TaskCanceledException) when (!ct.IsCancellationRequested)
         {
             return (false, null,
-                "Tiempo de espera agotado. El servicio de SUNAT no respondió.");
+                "Tiempo de espera agotado. SUNAT no respondió dentro del plazo.", 0);
         }
         catch (HttpRequestException ex)
         {
-            return (false, null, $"Error de red: {ex.Message}");
+            return (false, null, $"Error de red: {ex.Message}", 0);
         }
     }
 
@@ -197,9 +197,9 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
         return new XDocument(new XDeclaration("1.0", "UTF-8", null), sobre).ToString();
     }
 
-    private static ResultadoEnvio InterpretarSendBill(string cuerpo)
+    private static ResultadoEnvio InterpretarSendBill(string cuerpo, int codigoHttp)
     {
-        if (!TryParsear(cuerpo, out var doc, out var errorParseo))
+        if (!TryParsear(cuerpo, codigoHttp, out var doc, out var errorParseo))
             return ResultadoEnvio.FalloDeRed(errorParseo);
 
         var fault = LeerFault(doc!);
@@ -218,9 +218,9 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
         return LectorCdr.Interpretar(cdrZip, cdrXml);
     }
 
-    private static ResultadoTicket InterpretarSendSummary(string cuerpo)
+    private static ResultadoTicket InterpretarSendSummary(string cuerpo, int codigoHttp)
     {
-        if (!TryParsear(cuerpo, out var doc, out var errorParseo))
+        if (!TryParsear(cuerpo, codigoHttp, out var doc, out var errorParseo))
             return ResultadoTicket.Fallo(errorParseo, reintentable: true);
 
         var fault = LeerFault(doc!);
@@ -235,9 +235,9 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
             : new ResultadoTicket(true, ticket.Value, "Resumen recibido por SUNAT.");
     }
 
-    private static ResultadoEnvio InterpretarGetStatus(string cuerpo)
+    private static ResultadoEnvio InterpretarGetStatus(string cuerpo, int codigoHttp)
     {
-        if (!TryParsear(cuerpo, out var doc, out var errorParseo))
+        if (!TryParsear(cuerpo, codigoHttp, out var doc, out var errorParseo))
             return ResultadoEnvio.FalloDeRed(errorParseo);
 
         var fault = LeerFault(doc!);
@@ -294,7 +294,21 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
         return Convert.TryFromBase64String(limpio, buffer, out _);
     }
 
-    private static bool TryParsear(string cuerpo, out XDocument? doc, out string error)
+    /// <summary>
+    /// Intenta interpretar la respuesta como XML.
+    ///
+    /// EL MENSAJE DESCRIBE EL HECHO, NO UNA SUPOSICIÓN.
+    ///
+    /// La versión anterior decía "el servicio está caído o en mantenimiento"
+    /// cada vez que la respuesta no era XML. Sonaba útil y mandaba a buscar en
+    /// la dirección equivocada: la causa real solía ser saturación por enviar
+    /// demasiadas peticiones seguidas, o una URL mal escrita.
+    ///
+    /// Incluir el código HTTP y un recorte de lo que de verdad llegó convierte
+    /// un misterio en algo que se diagnostica de un vistazo.
+    /// </summary>
+    private static bool TryParsear(
+        string cuerpo, int codigoHttp, out XDocument? doc, out string error)
     {
         try
         {
@@ -305,8 +319,21 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
         catch (Exception)
         {
             doc = null;
-            error = "SUNAT devolvió una respuesta que no es XML válido. " +
-                    "Suele indicar que el servicio está caído o en mantenimiento.";
+
+            var recorte = cuerpo.Length > 300
+                ? cuerpo[..300].ReplaceLineEndings(" ") + "..."
+                : cuerpo.ReplaceLineEndings(" ");
+
+            var pista = codigoHttp switch
+            {
+                429        => "SUNAT está limitando las peticiones: llegan demasiadas seguidas.",
+                >= 500     => "SUNAT devolvió un error de servidor.",
+                404        => "La URL del servicio no existe. Revisa el endpoint.",
+                401 or 403 => "Credenciales rechazadas.",
+                _          => "Respuesta inesperada."
+            };
+
+            error = $"{pista} HTTP {codigoHttp}. Recibido: {recorte}";
             return false;
         }
     }
