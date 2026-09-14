@@ -1,0 +1,108 @@
+### Variables
+@base = https://localhost:7295
+@clave = fac_dev_UkV5QkFOX0RFU0FSUk9MTE9fMjAyNg
+
+### Salud del servicio (no requiere clave)
+GET {{base}}/health
+
+### Sin clave: debe responder 401
+GET {{base}}/v1/emisor
+
+### Con clave: devuelve el emisor resuelto
+GET {{base}}/v1/emisor
+Authorization: Bearer {{clave}}
+
+### Emitir una factura
+POST {{base}}/v1/comprobantes
+Authorization: Bearer {{clave}}
+Content-Type: application/json
+
+{
+  "tipo": "01",
+  "serie": "F001",
+  "moneda": "PEN",
+  "formaPago": "Contado",
+  "receptor": {
+    "tipoDocumento": "6",
+    "numeroDocumento": "20512345678",
+    "razonSocial": "CLIENTE DE PRUEBA SAC",
+    "direccion": "JR. CLIENTE 456"
+  },
+  "lineas": [
+    {
+      "codigoProducto": "P001",
+      "descripcion": "PRODUCTO DE PRUEBA",
+      "unidadMedida": "NIU",
+      "cantidad": 2,
+      "valorUnitario": 50.00
+    }
+  ],
+  "extra": {
+    "ordenCompra": "OC-8891",
+    "vendedor": "Erick"
+  }
+}
+
+### Emitir con idempotencia: ejecuta DOS VECES
+### La segunda debe devolver 200 con el mismo comprobante, no 202.
+POST {{base}}/v1/comprobantes
+Authorization: Bearer {{clave}}
+Idempotency-Key: prueba-fija-001
+Content-Type: application/json
+
+{
+  "tipo": "01",
+  "serie": "F001",
+  "receptor": {
+    "tipoDocumento": "6",
+    "numeroDocumento": "20512345678",
+    "razonSocial": "CLIENTE DE PRUEBA SAC"
+  },
+  "lineas": [
+    { "descripcion": "SERVICIO", "unidadMedida": "ZZ", "cantidad": 1, "valorUnitario": 300.00 }
+  ]
+}
+
+### Factura con descuentos
+POST {{base}}/v1/comprobantes
+Authorization: Bearer {{clave}}
+Content-Type: application/json
+
+{
+  "tipo": "01",
+  "serie": "F001",
+  "descuentoGlobalPorcentaje": 5,
+  "receptor": {
+    "tipoDocumento": "6",
+    "numeroDocumento": "20512345678",
+    "razonSocial": "CLIENTE DE PRUEBA SAC"
+  },
+  "lineas": [
+    { "descripcion": "PRODUCTO A", "cantidad": 1, "valorUnitario": 100.00, "descuentoPorcentaje": 10 },
+    { "descripcion": "PRODUCTO B", "cantidad": 1, "valorUnitario": 20.00 }
+  ]
+}
+
+### Serie inexistente: debe responder 400 con un mensaje claro
+POST {{base}}/v1/comprobantes
+Authorization: Bearer {{clave}}
+Content-Type: application/json
+
+{
+  "tipo": "01",
+  "serie": "F999",
+  "receptor": { "tipoDocumento": "6", "numeroDocumento": "20512345678", "razonSocial": "X" },
+  "lineas": [ { "descripcion": "X", "cantidad": 1, "valorUnitario": 10 } ]
+}
+
+### Listar comprobantes
+GET {{base}}/v1/comprobantes?limite=10
+Authorization: Bearer {{clave}}
+
+### Consultar uno (reemplaza el id)
+GET {{base}}/v1/comprobantes/00000000-0000-0000-0000-000000000000
+Authorization: Bearer {{clave}}
+
+### Historial de un comprobante (reemplaza el id)
+GET {{base}}/v1/comprobantes/00000000-0000-0000-0000-000000000000/historial
+Authorization: Bearer {{clave}}
