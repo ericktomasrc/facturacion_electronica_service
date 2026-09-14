@@ -15,22 +15,15 @@ namespace Facturacion.Cpe;
 /// Y declara UBLVersionID 2.0 con CustomizationID 1.1. No existe una versión
 /// 2.1 de este documento: SUNAT lo dejó en el estándar anterior.
 ///
-/// Eso explica dos rarezas que vas a notar:
-///
-/// 1. El emisor no usa el bloque cac:Party completo de la factura, sino
-///    cbc:CustomerAssignedAccountID con el RUC directo. Es una forma más
-///    antigua de declarar partes.
-///
-/// 2. Cada línea representa un COMPROBANTE ENTERO, no un ítem. Solo lleva
-///    totales consolidados, receptor y estado.
+/// Cada línea representa un COMPROBANTE ENTERO, no un ítem: solo lleva totales
+/// consolidados, receptor y estado.
 /// </summary>
 public static class GeneradorResumenXml
 {
     private static readonly XNamespace Resumen =
         "urn:sunat:names:specification:ubl:peru:schema:xsd:SummaryDocuments-1";
 
-    private static readonly XNamespace Sac =
-        "urn:sunat:names:specification:ubl:peru:schema:xsd:SunatAggregateComponents-1";
+    private static XNamespace Sac => BloquesSunat.Sac;
 
     public static XDocument Generar(ResumenDiario r)
     {
@@ -39,11 +32,7 @@ public static class GeneradorResumenXml
                 "El resumen no tiene líneas. No tiene sentido enviarlo vacío.");
 
         var raiz = new XElement(Resumen + "SummaryDocuments",
-            new XAttribute(XNamespace.Xmlns + "cac", Ns.Cac.NamespaceName),
-            new XAttribute(XNamespace.Xmlns + "cbc", Ns.Cbc.NamespaceName),
-            new XAttribute(XNamespace.Xmlns + "ds",  Ns.Ds.NamespaceName),
-            new XAttribute(XNamespace.Xmlns + "ext", Ns.Ext.NamespaceName),
-            new XAttribute(XNamespace.Xmlns + "sac", Sac.NamespaceName),
+            BloquesSunat.Namespaces(),
 
             ExtensionesVacias(),
 
@@ -61,8 +50,8 @@ public static class GeneradorResumenXml
             new XElement(Ns.Cbc + "IssueDate",
                 r.FechaGeneracion.ToString("yyyy-MM-dd", Inv)),
 
-            BloqueFirmante(r.Emisor),
-            BloqueEmisor(r.Emisor)
+            BloquesSunat.Firmante(r.Emisor),
+            BloquesSunat.Emisor(r.Emisor)
         );
 
         foreach (var linea in r.Lineas.OrderBy(l => l.Orden))
@@ -70,33 +59,6 @@ public static class GeneradorResumenXml
 
         return new XDocument(new XDeclaration("1.0", "UTF-8", null), raiz);
     }
-
-    // ------------------------------------------------------------------ bloques
-
-    private static XElement BloqueFirmante(Emisor e) =>
-        new(Ns.Cac + "Signature",
-            new XElement(Ns.Cbc + "ID", e.Ruc),
-            new XElement(Ns.Cac + "SignatoryParty",
-                new XElement(Ns.Cac + "PartyIdentification",
-                    new XElement(Ns.Cbc + "ID", e.Ruc)),
-                new XElement(Ns.Cac + "PartyName",
-                    new XElement(Ns.Cbc + "Name", new XCData(e.RazonSocial)))),
-            new XElement(Ns.Cac + "DigitalSignatureAttachment",
-                new XElement(Ns.Cac + "ExternalReference",
-                    new XElement(Ns.Cbc + "URI", "#SignatureSP"))));
-
-    /// <summary>
-    /// Emisor en formato antiguo: el RUC va directo en CustomerAssignedAccountID.
-    /// No confundir con el bloque cac:Party de la factura.
-    /// </summary>
-    private static XElement BloqueEmisor(Emisor e) =>
-        new(Ns.Cac + "AccountingSupplierParty",
-            new XElement(Ns.Cbc + "CustomerAssignedAccountID", e.Ruc),
-            new XElement(Ns.Cbc + "AdditionalAccountID", TipoDocIdentidad.Ruc),
-            new XElement(Ns.Cac + "Party",
-                new XElement(Ns.Cac + "PartyLegalEntity",
-                    new XElement(Ns.Cbc + "RegistrationName",
-                        new XCData(e.RazonSocial)))));
 
     private static XElement BloqueLinea(LineaResumen l)
     {

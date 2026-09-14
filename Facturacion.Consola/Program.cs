@@ -3,11 +3,10 @@ using System.Xml.Linq;
 using Facturacion.Cpe;
 
 // ---------------------------------------------------------------------------
-// Emite dos boletas y las comunica a SUNAT en un resumen diario.
+// Emite una factura y después la da de baja.
 //
-// A diferencia de la factura, aquí NO se envía cada boleta: se agrupan todas
-// las del día en un solo documento, y SUNAT responde con un ticket que hay
-// que consultar después.
+// La baja anula el comprobante como si nunca hubiera existido. Es distinta de
+// una nota de crédito, que corrige la operación y deja rastro contable.
 // ---------------------------------------------------------------------------
 
 const string RutaCertificado = "certificado.pfx";
@@ -44,69 +43,70 @@ var certificado = new X509Certificate2(
 
 using var enviador = new EnviadorSunatSoap(ConfiguracionSunat.Beta(RucEmisor));
 
-// --- 1. Las boletas del día ------------------------------------------------
-// Se emitieron ayer. El resumen se genera hoy, que es el caso normal.
+// --- 1. La factura que después vamos a anular ------------------------------
+// Se emite con fecha de ayer, porque la comunicación de baja informa
+// comprobantes de una fecha anterior a la de generación.
 
 var ayer = DateTime.Today.AddDays(-1);
 
-var boleta1 = new Boleta
+var factura = new Factura
 {
-    Serie = "B001",
-    Correlativo = 1,
+    Serie = "F001",
+    Correlativo = 10,
     FechaEmision = ayer,
     Emisor = emisor,
     Receptor = new Receptor
     {
-        TipoDocumento = TipoDocIdentidad.Dni,
-        NumeroDocumento = "45678912",
-        RazonSocial = "JUAN PEREZ"
+        TipoDocumento = TipoDocIdentidad.Ruc,
+        NumeroDocumento = "20512345678",
+        RazonSocial = "CLIENTE DE PRUEBA SAC",
+        Direccion = "JR. CLIENTE 456"
     },
     Lineas =
     [
         new LineaComprobante
         {
             Numero = 1,
-            Descripcion = "PRODUCTO A",
-            Cantidad = 1,
-            ValorUnitario = 100.00m
+            CodigoProducto = "P001",
+            Descripcion = "PRODUCTO DE PRUEBA",
+            Cantidad = 2,
+            ValorUnitario = 50.00m
         }
     ]
 };
 
-var boleta2 = new Boleta
-{
-    Serie = "B001",
-    Correlativo = 2,
-    FechaEmision = ayer,
-    Emisor = emisor,
-    Receptor = new Receptor
-    {
-        TipoDocumento = TipoDocIdentidad.Dni,
-        NumeroDocumento = "10203040",
-        RazonSocial = "MARIA GARCIA"
-    },
-    Lineas =
-    [
-        new LineaComprobante
-        {
-            Numero = 1,
-            Descripcion = "PRODUCTO B",
-            Cantidad = 3,
-            ValorUnitario = 25.00m
-        }
-    ]
-};
+Console.WriteLine(new string('=', 60));
+Console.WriteLine($"FACTURA: {factura.NombreArchivo}");
+Console.WriteLine(new string('=', 60));
 
-Console.WriteLine("Boletas emitidas:");
-foreach (var b in new[] { boleta1, boleta2 })
+var xmlFactura = GeneradorFacturaXml.Generar(factura);
+var facturaFirmada = FirmadorXml.Firmar(xmlFactura, certificado);
+
+var rutaFactura = Path.Combine(carpetaSalida, $"{factura.NombreArchivo}.xml");
+FirmadorXml.Guardar(facturaFirmada, rutaFactura);
+
+var zipFactura = EmpaquetadorZip.ComprimirDesdeArchivo(rutaFactura);
+
+Console.WriteLine("Enviando factura...");
+var envioFactura = await enviador.EnviarAsync(
+    $"{factura.NombreArchivo}.zip", zipFactura);
+
+Console.ForegroundColor = envioFactura.Aceptado ? ConsoleColor.Green : ConsoleColor.Red;
+Console.WriteLine(envioFactura.Aceptado ? "ACEPTADA" : "RECHAZADA");
+Console.ResetColor();
+Console.WriteLine($"Código        : {envioFactura.CodigoRespuesta}");
+Console.WriteLine($"Descripción   : {envioFactura.Descripcion}");
+
+if (!envioFactura.Aceptado)
 {
-    var t = CalculadoraTotales.Calcular(b);
-    Console.WriteLine($"  {b.NumeroCompleto}  total {NumeroALetras.F2(t.ImporteTotal)}");
+    Console.WriteLine();
+    Console.WriteLine("No tiene sentido dar de baja algo que SUNAT no aceptó.");
+    return;
 }
 
-// --- 2. El resumen diario --------------------------------------------------
+// --- 2. La comunicación de baja --------------------------------------------
 
-var resumen = new ResumenDiario
+var baja = new ComunicacionBaja
 {
     Emisor = emisor,
     FechaReferencia = ayer,
@@ -114,59 +114,51 @@ var resumen = new ResumenDiario
     Correlativo = 1,
     Lineas =
     [
-        LineaResumen.DesdeBoleta(boleta1, orden: 1),
-        LineaResumen.DesdeBoleta(boleta2, orden: 2)
+        LineaBaja.Desde(factura, orden: 1, motivo: "ERROR EN LOS DATOS DEL CLIENTE")
     ]
 };
 
 Console.WriteLine();
 Console.WriteLine(new string('=', 60));
-Console.WriteLine($"RESUMEN DIARIO: {resumen.NombreArchivo}");
+Console.WriteLine($"COMUNICACIÓN DE BAJA: {baja.NombreArchivo}");
 Console.WriteLine(new string('=', 60));
 
-// --- 3. Generar, firmar y comprimir ----------------------------------------
+var xmlBaja = GeneradorBajaXml.Generar(baja);
+var bajaFirmada = FirmadorXml.Firmar(xmlBaja, certificado);
 
-var xml = GeneradorResumenXml.Generar(resumen);
-var firmado = FirmadorXml.Firmar(xml, certificado);
+var rutaBaja = Path.Combine(carpetaSalida, $"{baja.NombreArchivo}.xml");
+FirmadorXml.Guardar(bajaFirmada, rutaBaja);
 
-var rutaXml = Path.Combine(carpetaSalida, $"{resumen.NombreArchivo}.xml");
-FirmadorXml.Guardar(firmado, rutaXml);
+Console.WriteLine($"XML firmado   : {baja.NombreArchivo}.xml");
 
-Console.WriteLine($"XML firmado   : {resumen.NombreArchivo}.xml");
+var zipBaja = EmpaquetadorZip.ComprimirDesdeArchivo(rutaBaja);
+File.WriteAllBytes(Path.Combine(carpetaSalida, $"{baja.NombreArchivo}.zip"), zipBaja);
 
-var zip = EmpaquetadorZip.ComprimirDesdeArchivo(rutaXml);
-File.WriteAllBytes(Path.Combine(carpetaSalida, $"{resumen.NombreArchivo}.zip"), zip);
+// --- 3. Envío asíncrono: el mismo flujo del resumen diario -----------------
 
-// --- 4. Enviar: aquí llega un TICKET, no un CDR ----------------------------
+Console.WriteLine("Enviando comunicación de baja...");
 
-Console.WriteLine("Enviando resumen a SUNAT beta...");
+var envioBaja = await enviador.EnviarResumenAsync($"{baja.NombreArchivo}.zip", zipBaja);
 
-var envio = await enviador.EnviarResumenAsync($"{resumen.NombreArchivo}.zip", zip);
-
-if (!envio.Exitoso)
+if (!envioBaja.Exitoso)
 {
     Console.ForegroundColor = ConsoleColor.Red;
-    Console.WriteLine($"No se pudo enviar: {envio.Mensaje}");
+    Console.WriteLine($"No se pudo enviar: {envioBaja.Mensaje}");
     Console.ResetColor();
     return;
 }
 
-Console.WriteLine($"Ticket        : {envio.Ticket}");
-
-// --- 5. Consultar el ticket hasta que SUNAT termine ------------------------
-// En producción esto NO se hace esperando: el worker encola una consulta
-// diferida y libera el hilo. Aquí se espera solo porque es una prueba.
-
+Console.WriteLine($"Ticket        : {envioBaja.Ticket}");
 Console.WriteLine("Consultando el ticket...");
 
 var resultado = await enviador.EsperarTicketAsync(
-    envio.Ticket,
+    envioBaja.Ticket,
     intentosMaximos: 10,
     esperaEntreIntentos: TimeSpan.FromSeconds(3));
 
 Console.WriteLine();
 Console.ForegroundColor = resultado.Aceptado ? ConsoleColor.Green : ConsoleColor.Red;
-Console.WriteLine(resultado.Aceptado ? "ACEPTADO" : "NO ACEPTADO");
+Console.WriteLine(resultado.Aceptado ? "ACEPTADA" : "NO ACEPTADA");
 Console.ResetColor();
 
 Console.WriteLine($"Código        : {resultado.CodigoRespuesta}");
@@ -175,11 +167,9 @@ Console.WriteLine($"Descripción   : {resultado.Descripcion}");
 foreach (var obs in resultado.Observaciones)
     Console.WriteLine($"  Observación : {obs}");
 
-// --- 6. Guardar el CDR -----------------------------------------------------
-
 if (resultado.CdrZip is not null)
 {
-    var nombreCdr = LectorCdr.NombreArchivoCdr(resumen.NombreArchivo);
+    var nombreCdr = LectorCdr.NombreArchivoCdr(baja.NombreArchivo);
 
     File.WriteAllBytes(
         Path.Combine(carpetaSalida, $"{nombreCdr}.zip"), resultado.CdrZip);
