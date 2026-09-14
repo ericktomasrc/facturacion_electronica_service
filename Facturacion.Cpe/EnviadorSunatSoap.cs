@@ -7,13 +7,18 @@ namespace Facturacion.Cpe;
 /// <summary>
 /// Envía comprobantes al servicio SOAP de SUNAT (billService).
 ///
-/// POR QUÉ SE ARMA EL SOBRE SOAP A MANO Y NO CON UN CLIENTE GENERADO:
-/// el WSDL de SUNAT genera un cliente que arrastra configuración de WCF difícil
-/// de ajustar, sobre todo para la cabecera WS-Security. Armar el sobre a mano son
-/// 30 líneas, se ve exactamente qué se envía, y depurar es leer un string.
+/// Soporta los dos flujos:
 ///
-/// La autenticación es WS-Security UsernameToken en texto plano. Va sobre HTTPS,
-/// así que la credencial viaja cifrada por el canal.
+///   SÍNCRONO  (facturas, notas)
+///     sendBill → CDR inmediato
+///
+///   ASÍNCRONO (resúmenes diarios, comunicaciones de baja)
+///     sendSummary → ticket
+///     getStatus   → CDR, cuando SUNAT termine de procesar
+///
+/// POR QUÉ EL SOBRE SOAP SE ARMA A MANO: el cliente generado desde el WSDL
+/// arrastra configuración de WCF difícil de ajustar, sobre todo para la
+/// cabecera WS-Security. Así son 30 líneas y se ve exactamente qué se envía.
 /// </summary>
 public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
 {
@@ -38,15 +43,110 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
         _http.Timeout = config.Timeout;
     }
 
+    // ------------------------------------------------------------ flujo síncrono
+
     public async Task<ResultadoEnvio> EnviarAsync(
         string nombreArchivo,
         byte[] contenidoZip,
         CancellationToken ct = default)
     {
-        var sobre = ConstruirSobre(nombreArchivo, contenidoZip);
+        var cuerpo = new XElement(Servicio + "sendBill",
+            new XElement("fileName", nombreArchivo),
+            new XElement("contentFile", Convert.ToBase64String(contenidoZip)));
 
-        HttpResponseMessage respuesta;
-        string cuerpo;
+        var (exito, respuesta, error) = await PostAsync(cuerpo, ct);
+
+        if (!exito)
+            return ResultadoEnvio.FalloDeRed(error!);
+
+        return InterpretarSendBill(respuesta!);
+    }
+
+    // ----------------------------------------------------------- flujo asíncrono
+
+    /// <summary>
+    /// Envía un resumen diario o una comunicación de baja.
+    /// SUNAT NO devuelve un CDR aquí, sino un ticket para consultar después.
+    /// </summary>
+    public async Task<ResultadoTicket> EnviarResumenAsync(
+        string nombreArchivo,
+        byte[] contenidoZip,
+        CancellationToken ct = default)
+    {
+        var cuerpo = new XElement(Servicio + "sendSummary",
+            new XElement("fileName", nombreArchivo),
+            new XElement("contentFile", Convert.ToBase64String(contenidoZip)));
+
+        var (exito, respuesta, error) = await PostAsync(cuerpo, ct);
+
+        if (!exito)
+            return ResultadoTicket.Fallo(error!, reintentable: true);
+
+        return InterpretarSendSummary(respuesta!);
+    }
+
+    /// <summary>
+    /// Consulta el resultado de un ticket.
+    ///
+    /// SUNAT puede responder que todavía está procesando (código 98). En ese
+    /// caso hay que volver a consultar más tarde, no reintentar el envío.
+    /// </summary>
+    public async Task<ResultadoEnvio> ConsultarTicketAsync(
+        string ticket,
+        CancellationToken ct = default)
+    {
+        var cuerpo = new XElement(Servicio + "getStatus",
+            new XElement("ticket", ticket));
+
+        var (exito, respuesta, error) = await PostAsync(cuerpo, ct);
+
+        if (!exito)
+            return ResultadoEnvio.FalloDeRed(error!);
+
+        return InterpretarGetStatus(respuesta!);
+    }
+
+    /// <summary>
+    /// Consulta el ticket repetidamente hasta que SUNAT termine de procesar.
+    ///
+    /// Útil para pruebas. En producción NO se hace así: el worker encola una
+    /// consulta diferida y libera el hilo, en vez de quedarse esperando.
+    /// </summary>
+    public async Task<ResultadoEnvio> EsperarTicketAsync(
+        string ticket,
+        int intentosMaximos = 10,
+        TimeSpan? esperaEntreIntentos = null,
+        CancellationToken ct = default)
+    {
+        var espera = esperaEntreIntentos ?? TimeSpan.FromSeconds(3);
+
+        // SUNAT necesita unos segundos antes de reconocer un ticket recién
+        // emitido. Consultar de inmediato puede devolver "el ticket no existe".
+        await Task.Delay(espera, ct);
+
+        ResultadoEnvio ultimo = ResultadoEnvio.FalloDeRed("Sin intentos.");
+
+        for (var intento = 1; intento <= intentosMaximos; intento++)
+        {
+            ultimo = await ConsultarTicketAsync(ticket, ct);
+
+            // 98 significa "todavía en proceso": solo en ese caso se reintenta.
+            if (ultimo.CodigoRespuesta != "98")
+                return ultimo;
+
+            await Task.Delay(espera, ct);
+        }
+
+        return ultimo;
+    }
+
+    // ------------------------------------------------------------------ interno
+
+    private async Task<(bool Exito, string? Respuesta, string? Error)> PostAsync(
+        XElement cuerpoSoap,
+        CancellationToken ct)
+    {
+        var sobre = ConstruirSobre(cuerpoSoap);
 
         try
         {
@@ -61,29 +161,25 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
                 Content = contenido
             };
 
-            // SUNAT espera la cabecera SOAPAction aunque vaya vacía.
             peticion.Headers.TryAddWithoutValidation("SOAPAction", "\"\"");
 
-            respuesta = await _http.SendAsync(peticion, ct);
-            cuerpo = await respuesta.Content.ReadAsStringAsync(ct);
+            var respuesta = await _http.SendAsync(peticion, ct);
+            var texto = await respuesta.Content.ReadAsStringAsync(ct);
+
+            return (true, texto, null);
         }
         catch (TaskCanceledException) when (!ct.IsCancellationRequested)
         {
-            // Timeout. SUNAT se cae con frecuencia: esto SÍ se reintenta.
-            return ResultadoEnvio.FalloDeRed(
+            return (false, null,
                 "Tiempo de espera agotado. El servicio de SUNAT no respondió.");
         }
         catch (HttpRequestException ex)
         {
-            return ResultadoEnvio.FalloDeRed($"Error de red: {ex.Message}");
+            return (false, null, $"Error de red: {ex.Message}");
         }
-
-        return InterpretarRespuesta(respuesta.IsSuccessStatusCode, cuerpo);
     }
 
-    // ------------------------------------------------------------------ interno
-
-    private string ConstruirSobre(string nombreArchivo, byte[] contenidoZip)
+    private string ConstruirSobre(XElement cuerpo)
     {
         var sobre = new XElement(Soap + "Envelope",
             new XAttribute(XNamespace.Xmlns + "soapenv", Soap.NamespaceName),
@@ -96,77 +192,149 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
                         new XElement(Wsse + "Username", _config.Usuario),
                         new XElement(Wsse + "Password", _config.Clave)))),
 
-            new XElement(Soap + "Body",
-                new XElement(Servicio + "sendBill",
-                    new XElement("fileName", nombreArchivo),
-                    new XElement("contentFile", Convert.ToBase64String(contenidoZip)))));
+            new XElement(Soap + "Body", cuerpo));
 
         return new XDocument(new XDeclaration("1.0", "UTF-8", null), sobre).ToString();
     }
 
-    private static ResultadoEnvio InterpretarRespuesta(bool exitoHttp, string cuerpo)
+    private static ResultadoEnvio InterpretarSendBill(string cuerpo)
     {
-        XDocument doc;
+        if (!TryParsear(cuerpo, out var doc, out var errorParseo))
+            return ResultadoEnvio.FalloDeRed(errorParseo);
 
-        try
-        {
-            doc = XDocument.Parse(cuerpo);
-        }
-        catch (Exception)
-        {
-            return ResultadoEnvio.FalloDeRed(
-                "SUNAT devolvió una respuesta que no es XML válido. " +
-                "Suele indicar que el servicio está caído o en mantenimiento.");
-        }
-
-        // Caso 1: SUNAT devolvió un Fault con el motivo del rechazo.
-        var fault = doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "Fault");
-
+        var fault = LeerFault(doc!);
         if (fault is not null)
-        {
-            var codigo = fault.Descendants()
-                .FirstOrDefault(e => e.Name.LocalName == "faultcode")?.Value ?? "";
+            return fault;
 
-            var mensaje = fault.Descendants()
-                .FirstOrDefault(e => e.Name.LocalName == "faultstring")?.Value
-                ?? "SUNAT rechazó el envío sin dar detalle.";
-
-            // El código viene como "soap-env:Client.2335"; interesa el número final.
-            var numero = codigo.Contains('.')
-                ? codigo[(codigo.LastIndexOf('.') + 1)..]
-                : codigo;
-
-            return new ResultadoEnvio(
-                Aceptado: false,
-                CodigoRespuesta: numero,
-                Descripcion: mensaje,
-                Observaciones: [],
-                CdrZip: null,
-                CdrXml: null)
-            {
-                // Los códigos del 100 al 1999 son errores de datos: NO reintentar.
-                // Los del 0100 al 0999 suelen ser de autenticación o formato del envío.
-                EsReintentable = false
-            };
-        }
-
-        // Caso 2: respuesta correcta, con el CDR en base64.
-        var applicationResponse = doc.Descendants()
-            .FirstOrDefault(e => e.Name.LocalName == "applicationResponse");
+        var applicationResponse = Buscar(doc!, "applicationResponse");
 
         if (applicationResponse is null)
-        {
-            return exitoHttp
-                ? ResultadoEnvio.FalloDeRed(
-                    "SUNAT respondió sin CDR y sin error. Respuesta inesperada.")
-                : ResultadoEnvio.FalloDeRed(
-                    "SUNAT devolvió un error HTTP sin cuerpo interpretable.");
-        }
+            return ResultadoEnvio.FalloDeRed(
+                "SUNAT respondió sin CDR y sin error. Respuesta inesperada.");
 
         var cdrZip = Convert.FromBase64String(applicationResponse.Value);
         var (_, cdrXml) = EmpaquetadorZip.ExtraerPrimerXml(cdrZip);
 
         return LectorCdr.Interpretar(cdrZip, cdrXml);
+    }
+
+    private static ResultadoTicket InterpretarSendSummary(string cuerpo)
+    {
+        if (!TryParsear(cuerpo, out var doc, out var errorParseo))
+            return ResultadoTicket.Fallo(errorParseo, reintentable: true);
+
+        var fault = LeerFault(doc!);
+        if (fault is not null)
+            return ResultadoTicket.Fallo(
+                $"[{fault.CodigoRespuesta}] {fault.Descripcion}");
+
+        var ticket = Buscar(doc!, "ticket");
+
+        return ticket is null
+            ? ResultadoTicket.Fallo("SUNAT no devolvió ticket.", reintentable: true)
+            : new ResultadoTicket(true, ticket.Value, "Resumen recibido por SUNAT.");
+    }
+
+    private static ResultadoEnvio InterpretarGetStatus(string cuerpo)
+    {
+        if (!TryParsear(cuerpo, out var doc, out var errorParseo))
+            return ResultadoEnvio.FalloDeRed(errorParseo);
+
+        var fault = LeerFault(doc!);
+        if (fault is not null)
+            return fault;
+
+        var statusCode = Buscar(doc!, "statusCode")?.Value ?? "";
+        var content = Buscar(doc!, "content")?.Value;
+
+        // 98 = todavía en proceso. Volver a consultar, no reintentar el envío.
+        if (statusCode == "98")
+            return new ResultadoEnvio(
+                false, "98", "En proceso. Vuelve a consultar el ticket.",
+                [], null, null);
+
+        if (string.IsNullOrWhiteSpace(content))
+            return new ResultadoEnvio(
+                false, statusCode,
+                $"SUNAT respondió sin contenido. Código {statusCode}.",
+                [], null, null);
+
+        // CUIDADO CON ESTO: el elemento 'content' no siempre trae un ZIP en
+        // base64. Cuando hay un problema con el propio ticket, SUNAT pone ahí
+        // un mensaje en TEXTO PLANO. Por ejemplo:
+        //
+        //   <content>El ticket no existe</content>
+        //   <statusCode>0127</statusCode>
+        //
+        // Decodificarlo a ciegas lanza una excepción, y si el catch de arriba
+        // es demasiado amplio, termina reportando un error falso de red en vez
+        // del problema real. Por eso se verifica antes.
+        if (!EsBase64(content))
+            return new ResultadoEnvio(
+                false, statusCode, content, [], null, null);
+
+        var cdrZip = Convert.FromBase64String(content);
+        var (_, cdrXml) = EmpaquetadorZip.ExtraerPrimerXml(cdrZip);
+
+        return LectorCdr.Interpretar(cdrZip, cdrXml);
+    }
+
+    /// <summary>
+    /// Comprueba si el texto es realmente un ZIP codificado en base64.
+    /// Un mensaje corto de SUNAT nunca lo es.
+    /// </summary>
+    private static bool EsBase64(string valor)
+    {
+        var limpio = valor.Trim();
+
+        // Un ZIP con un CDR dentro siempre supera holgadamente este tamaño.
+        if (limpio.Length < 100) return false;
+
+        var buffer = new byte[limpio.Length];
+        return Convert.TryFromBase64String(limpio, buffer, out _);
+    }
+
+    private static bool TryParsear(string cuerpo, out XDocument? doc, out string error)
+    {
+        try
+        {
+            doc = XDocument.Parse(cuerpo);
+            error = "";
+            return true;
+        }
+        catch (Exception)
+        {
+            doc = null;
+            error = "SUNAT devolvió una respuesta que no es XML válido. " +
+                    "Suele indicar que el servicio está caído o en mantenimiento.";
+            return false;
+        }
+    }
+
+    private static XElement? Buscar(XDocument doc, string nombreLocal) =>
+        doc.Descendants().FirstOrDefault(e => e.Name.LocalName == nombreLocal);
+
+    private static ResultadoEnvio? LeerFault(XDocument doc)
+    {
+        var fault = Buscar(doc, "Fault");
+        if (fault is null) return null;
+
+        var codigo = fault.Descendants()
+            .FirstOrDefault(e => e.Name.LocalName == "faultcode")?.Value ?? "";
+
+        var mensaje = fault.Descendants()
+            .FirstOrDefault(e => e.Name.LocalName == "faultstring")?.Value
+            ?? "SUNAT rechazó el envío sin dar detalle.";
+
+        // El código viene como "soap-env:Client.2335"; interesa el número final.
+        var numero = codigo.Contains('.')
+            ? codigo[(codigo.LastIndexOf('.') + 1)..]
+            : codigo;
+
+        return new ResultadoEnvio(false, numero, mensaje, [], null, null)
+        {
+            EsReintentable = false
+        };
     }
 
     public void Dispose()
