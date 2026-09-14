@@ -42,6 +42,37 @@ public static class CatalogoUri
     public const string C10_NotaDebito       = Base + "10";
     public const string C16_TipoPrecio       = Base + "16";
     public const string C51_TipoOperacion    = Base + "51";
+    public const string C53_CargoDescuento   = Base + "53";
+}
+
+/// <summary>
+/// Catálogo 53: códigos de descuentos y cargos.
+///
+/// LA DISTINCIÓN CLAVE ES SI AFECTA O NO LA BASE IMPONIBLE:
+///
+///   Si afecta    → el IGV se calcula sobre el monto ya descontado.
+///   Si no afecta → el IGV se calcula sobre el monto original, y el descuento
+///                  solo reduce lo que el cliente paga.
+///
+/// Elegir el código equivocado cambia el impuesto declarado, así que no es
+/// un detalle cosmético.
+/// </summary>
+public static class CodigoDescuento
+{
+    /// <summary>Descuento global que sí afecta la base imponible del IGV.</summary>
+    public const string GlobalAfectaBase = "00";
+
+    /// <summary>Descuento global que no afecta la base imponible.</summary>
+    public const string GlobalNoAfectaBase = "01";
+
+    /// <summary>Descuento por ítem. Afecta la base imponible de esa línea.</summary>
+    public const string PorItem = "00";
+
+    /// <summary>Cargo global que afecta la base imponible.</summary>
+    public const string CargoGlobalAfectaBase = "47";
+
+    /// <summary>Cargo por ítem.</summary>
+    public const string CargoPorItem = "47";
 }
 
 /// <summary>Catálogo 01: tipo de comprobante.</summary>

@@ -154,6 +154,20 @@ internal static class BloquesComunes
     /// Totales monetarios. El nombre del elemento cambia según el documento:
     /// "LegalMonetaryTotal" en factura y nota de crédito,
     /// "RequestedMonetaryTotal" en nota de débito.
+    ///
+    /// POR QUÉ NO APARECE AllowanceTotalAmount:
+    ///
+    /// Ese elemento es exclusivamente para DESCUENTOS GLOBALES, los que se
+    /// aplican al comprobante completo. Los descuentos por línea NO van ahí,
+    /// porque ya están descontados dentro del LineExtensionAmount de cada línea.
+    ///
+    /// Declararlos en ambos sitios los cuenta dos veces, y SUNAT responde con
+    /// el error 3300: "la sumatoria consignada en descuentos globales no
+    /// corresponde al total". El XSD no lo detecta, porque valida la forma
+    /// del documento, no su aritmética.
+    ///
+    /// Cuando se implementen los descuentos globales, este elemento vuelve,
+    /// pero llevando únicamente el total de esos descuentos.
     /// </summary>
     internal static XElement TotalesMonetarios(
         string nombreElemento, string moneda, TotalesComprobante t) =>
@@ -209,6 +223,10 @@ internal static class BloquesComunes
                             ? TipoPrecio.ValorReferencialGratuito
                             : TipoPrecio.PrecioUnitarioIncluyeIgv))),
 
+            // El descuento por línea va aquí: después de PricingReference y
+            // antes de TaxTotal. El esquema no admite otro orden.
+            DescuentoDeLinea(moneda, c),
+
             new XElement(Ns.Cac + "TaxTotal",
                 new XElement(Ns.Cbc + "TaxAmount",
                     new XAttribute("currencyID", moneda), F2(c.Igv)),
@@ -243,6 +261,49 @@ internal static class BloquesComunes
                 new XElement(Ns.Cbc + "PriceAmount",
                     new XAttribute("currencyID", moneda),
                     l.ValorUnitario.ToString("F2", Inv))));
+    }
+
+    /// <summary>
+    /// Descuento aplicado a una línea. Devuelve null si no hay descuento,
+    /// y XElement ignora los nulos, así que el nodo simplemente no aparece.
+    ///
+    /// ChargeIndicator distingue las dos caras del mismo elemento:
+    ///   false → descuento (resta)
+    ///   true  → cargo (suma)
+    ///
+    /// BaseAmount debe ser el valor ANTES del descuento. SUNAT recalcula
+    /// Amount = BaseAmount × MultiplierFactorNumeric y compara.
+    /// </summary>
+    internal static XElement? DescuentoDeLinea(string moneda, LineaCalculada c)
+    {
+        if (!c.Linea.TieneDescuento) return null;
+
+        return new XElement(Ns.Cac + "AllowanceCharge",
+            new XElement(Ns.Cbc + "ChargeIndicator", "false"),
+            new XElement(Ns.Cbc + "AllowanceChargeReasonCode",
+                CodigoDescuento.PorItem),
+            new XElement(Ns.Cbc + "MultiplierFactorNumeric",
+                (c.Linea.DescuentoPorcentaje / 100m).ToString("0.#####", Inv)),
+            new XElement(Ns.Cbc + "Amount",
+                new XAttribute("currencyID", moneda), F2(c.Descuento)),
+            new XElement(Ns.Cbc + "BaseAmount",
+                new XAttribute("currencyID", moneda), F2(c.ValorBruto)));
+    }
+
+    /// <summary>
+    /// Tipo de cambio. Solo se declara cuando el comprobante no está en soles.
+    /// Va después de los descuentos globales y antes de TaxTotal.
+    /// </summary>
+    internal static XElement? TipoDeCambio(TipoCambio? tc)
+    {
+        if (tc is null) return null;
+
+        return new XElement(Ns.Cac + "PaymentExchangeRate",
+            new XElement(Ns.Cbc + "SourceCurrencyCode", tc.MonedaOrigen),
+            new XElement(Ns.Cbc + "TargetCurrencyCode", tc.MonedaDestino),
+            new XElement(Ns.Cbc + "CalculationRate",
+                tc.Tasa.ToString("F3", Inv)),
+            new XElement(Ns.Cbc + "Date", tc.Fecha.ToString("yyyy-MM-dd", Inv)));
     }
 
     /// <summary>Atributos de namespace comunes a todos los documentos.</summary>

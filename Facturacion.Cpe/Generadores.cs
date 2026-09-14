@@ -48,6 +48,9 @@ public static class GeneradorFacturaXml
                 new XElement(Ns.Cbc + "ID", "FormaPago"),
                 new XElement(Ns.Cbc + "PaymentMeansID", f.FormaPago)),
 
+            // Solo aparece si la factura no está en soles.
+            TipoDeCambio(f.TipoCambio),
+
             TaxTotal(f.Moneda, totales),
             TotalesMonetarios("LegalMonetaryTotal", f.Moneda, totales)
         );
@@ -151,6 +154,8 @@ public static class GeneradorNotaXml
             Signature(comprobante),
             Emisor(comprobante.Emisor),
             Receptor(comprobante.Receptor),
+
+            TipoDeCambio(comprobante.TipoCambio),
 
             TaxTotal(comprobante.Moneda, totales),
             TotalesMonetarios(nombreTotales, comprobante.Moneda, totales)
