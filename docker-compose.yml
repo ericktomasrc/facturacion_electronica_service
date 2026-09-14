@@ -1,0 +1,51 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: facturacion-db
+    restart: unless-stopped
+
+    environment:
+      # Este es el usuario DUEÑO del esquema, el que corre las migraciones.
+      # La aplicación NO usa este usuario: se conecta con uno restringido,
+      # creado en la migración, que sí está sujeto a Row Level Security.
+      POSTGRES_USER: facturacion_owner
+      POSTGRES_PASSWORD: cambiame_en_produccion
+      POSTGRES_DB: facturacion
+
+      # Configuración regional. El servidor guarda todo en UTC y la aplicación
+      # convierte al mostrar: mezclar zonas horarias en la base es una fuente
+      # de errores difíciles de rastrear.
+      TZ: UTC
+      PGTZ: UTC
+
+    ports:
+      - "5433:5432"
+
+    volumes:
+      - datos_postgres:/var/lib/postgresql/data
+      # Los archivos de esta carpeta se ejecutan en orden alfabético la
+      # PRIMERA vez que arranca el contenedor, cuando el volumen está vacío.
+      # Si cambias una migración después, hay que borrar el volumen.
+      - ./migraciones:/docker-entrypoint-initdb.d:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U facturacion_owner -d facturacion"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Interfaz web para inspeccionar la base durante el desarrollo.
+  # No la despliegues en producción.
+  adminer:
+    image: adminer:latest
+    container_name: facturacion-adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  datos_postgres:
