@@ -82,12 +82,71 @@ var conDescuento = new Factura
 
 await Emitir("FACTURA CON DESCUENTO", conDescuento);
 
-// --- Caso 2: factura en dólares --------------------------------------------
+// --- Caso 2: factura con descuento global ----------------------------------
+
+var conDescuentoGlobal = new Factura
+{
+    Serie = "F001",
+    Correlativo = 22,
+    FechaEmision = DateTime.Now,
+    DescuentoGlobalPorcentaje = 5m,
+    Emisor = emisor,
+    Receptor = receptor,
+    Lineas =
+    [
+        new LineaComprobante
+        {
+            Numero = 1,
+            CodigoProducto = "P001",
+            Descripcion = "PRODUCTO A",
+            Cantidad = 1,
+            ValorUnitario = 100.00m
+        },
+        new LineaComprobante
+        {
+            Numero = 2,
+            CodigoProducto = "P002",
+            Descripcion = "PRODUCTO B",
+            Cantidad = 1,
+            ValorUnitario = 20.00m
+        }
+    ]
+};
+
+await Emitir("FACTURA CON DESCUENTO GLOBAL", conDescuentoGlobal);
+
+// --- Caso 3: descuento de linea mas descuento global -----------------------
+
+var conAmbos = new Factura
+{
+    Serie = "F001",
+    Correlativo = 23,
+    FechaEmision = DateTime.Now,
+    DescuentoGlobalPorcentaje = 10m,
+    Emisor = emisor,
+    Receptor = receptor,
+    Lineas =
+    [
+        new LineaComprobante
+        {
+            Numero = 1,
+            CodigoProducto = "P001",
+            Descripcion = "PRODUCTO CON AMBOS DESCUENTOS",
+            Cantidad = 2,
+            ValorUnitario = 50.00m,
+            DescuentoPorcentaje = 10m
+        }
+    ]
+};
+
+await Emitir("DESCUENTO DE LINEA MAS GLOBAL", conAmbos);
+
+// --- Caso 4: factura en dólares --------------------------------------------
 
 var enDolares = new Factura
 {
     Serie = "F001",
-    Correlativo = 21,
+    Correlativo = 24,
     FechaEmision = DateTime.Now,
     Moneda = "USD",
     TipoCambio = new TipoCambio
@@ -129,11 +188,12 @@ async Task Emitir(string titulo, Factura factura)
 
     var t = CalculadoraTotales.Calcular(factura);
 
-    Console.WriteLine($"Gravado       : {NumeroALetras.F2(t.TotalGravado)}");
+    Console.WriteLine($"Valor venta   : {NumeroALetras.F2(t.ValorVenta)}");
 
     if (t.TotalDescuentos > 0)
         Console.WriteLine($"Descuentos    : {NumeroALetras.F2(t.TotalDescuentos)}");
 
+    Console.WriteLine($"Base IGV      : {NumeroALetras.F2(t.TotalGravado)}");
     Console.WriteLine($"IGV           : {NumeroALetras.F2(t.TotalIgv)}");
     Console.WriteLine($"Total         : {NumeroALetras.F2(t.ImporteTotal)} {factura.Moneda}");
     Console.WriteLine($"Leyenda       : {NumeroALetras.Leyenda(t.ImporteTotal, factura.Moneda)}");

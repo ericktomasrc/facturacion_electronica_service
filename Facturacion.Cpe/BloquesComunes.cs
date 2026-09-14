@@ -264,26 +264,30 @@ internal static class BloquesComunes
     }
 
     /// <summary>
-    /// Descuento aplicado a una línea. Devuelve null si no hay descuento,
-    /// y XElement ignora los nulos, así que el nodo simplemente no aparece.
+    /// Descuento aplicado a una línea. Devuelve null si no hay, y XElement
+    /// ignora los nulos, así que el nodo simplemente no aparece.
     ///
     /// ChargeIndicator distingue las dos caras del mismo elemento:
     ///   false → descuento (resta)
     ///   true  → cargo (suma)
     ///
-    /// BaseAmount debe ser el valor ANTES del descuento. SUNAT recalcula
-    /// Amount = BaseAmount × MultiplierFactorNumeric y compara.
+    /// El factor que se declara ya combina el descuento propio de la línea con
+    /// su parte del descuento global del comprobante. Por eso el global no
+    /// aparece en ningún otro sitio del documento.
+    ///
+    /// BaseAmount debe ser el valor ANTES del descuento: SUNAT recalcula
+    /// Amount = BaseAmount x MultiplierFactorNumeric y compara.
     /// </summary>
     internal static XElement? DescuentoDeLinea(string moneda, LineaCalculada c)
     {
-        if (!c.Linea.TieneDescuento) return null;
+        if (!c.TieneDescuento) return null;
 
         return new XElement(Ns.Cac + "AllowanceCharge",
             new XElement(Ns.Cbc + "ChargeIndicator", "false"),
             new XElement(Ns.Cbc + "AllowanceChargeReasonCode",
                 CodigoDescuento.PorItem),
             new XElement(Ns.Cbc + "MultiplierFactorNumeric",
-                (c.Linea.DescuentoPorcentaje / 100m).ToString("0.#####", Inv)),
+                c.FactorDescuento.ToString("0.#####", Inv)),
             new XElement(Ns.Cbc + "Amount",
                 new XAttribute("currencyID", moneda), F2(c.Descuento)),
             new XElement(Ns.Cbc + "BaseAmount",

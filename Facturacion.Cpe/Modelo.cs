@@ -17,6 +17,22 @@ public abstract class ComprobanteBase
     /// </summary>
     public TipoCambio? TipoCambio { get; set; }
 
+    /// <summary>
+    /// Descuento global sobre el comprobante completo, en porcentaje.
+    /// 5 significa 5%.
+    ///
+    /// DIFERENCIA CON EL DESCUENTO POR LÍNEA: este se aplica sobre la suma de
+    /// todas las líneas y reduce la base imponible del documento entero. El
+    /// IGV del comprobante se calcula sobre el monto ya descontado.
+    ///
+    /// Se declara con el código 00 del catálogo 53, que es el descuento global
+    /// que sí afecta la base imponible. Existe también el código 01, para
+    /// descuentos que no la afectan, pero ese caso no está implementado aquí.
+    /// </summary>
+    public decimal DescuentoGlobalPorcentaje { get; set; }
+
+    public bool TieneDescuentoGlobal => DescuentoGlobalPorcentaje > 0;
+
     public Emisor Emisor { get; set; } = new();
     public Receptor Receptor { get; set; } = new();
     public List<LineaComprobante> Lineas { get; set; } = [];
@@ -152,7 +168,13 @@ public class LineaComprobante
     public bool TieneDescuento => DescuentoPorcentaje > 0;
 }
 
-/// <summary>Totales calculados del comprobante.</summary>
+/// <summary>
+/// Totales calculados del comprobante.
+///
+/// ValorVenta es la suma de los valores de venta de las líneas, con todos los
+/// descuentos ya aplicados. SUNAT exige que la base imponible declarada
+/// coincida exactamente con esa suma.
+/// </summary>
 public record TotalesComprobante(
     decimal TotalGravado,
     decimal TotalExonerado,
@@ -166,13 +188,21 @@ public record TotalesComprobante(
 /// <summary>
 /// Resultado del cálculo de una línea.
 /// </summary>
-/// <param name="ValorBruto">Cantidad por valor unitario, antes del descuento.</param>
+/// <param name="FactorDescuento">
+/// Descuento efectivo aplicado, ya combinando el de la línea con el global.
+/// Es el valor que viaja al XML en MultiplierFactorNumeric.
+/// </param>
+/// <param name="ValorBruto">Cantidad por valor unitario, antes de descuentos.</param>
 /// <param name="Descuento">Monto descontado.</param>
 /// <param name="ValorVenta">Valor neto: bruto menos descuento. Es lo que va al XML.</param>
 public record LineaCalculada(
     LineaComprobante Linea,
+    decimal FactorDescuento,
     decimal ValorBruto,
     decimal Descuento,
     decimal ValorVenta,
     decimal Igv,
-    decimal PrecioUnitarioConIgv);
+    decimal PrecioUnitarioConIgv)
+{
+    public bool TieneDescuento => Descuento > 0;
+}
