@@ -1,26 +1,28 @@
 namespace Facturacion.Cpe;
 
 /// <summary>
-/// Calcula IGV y totales.
+/// Calcula IGV y totales. Sirve para factura, boleta y notas por igual:
+/// las reglas de cálculo son las mismas, solo cambia el documento XML.
 ///
-/// Aquí es donde nacen la mayoría de los rechazos de SUNAT: sus validaciones
-/// comparan lo que declaras contra lo que recalculan ellos, con una tolerancia
-/// muy pequeña. Dos reglas que hay que respetar siempre:
+/// Aquí nace la mayoría de los rechazos de SUNAT: sus validaciones comparan
+/// lo declarado contra lo que ellos recalculan, con una tolerancia mínima.
+///
+/// DOS REGLAS QUE HAY QUE RESPETAR SIEMPRE:
 ///
 /// 1. Redondeo a 2 decimales con MidpointRounding.AwayFromZero.
-///    El redondeo bancario de .NET (el que trae por defecto) da resultados
-///    distintos en los casos .5 y produce diferencias de un céntimo.
+///    El redondeo bancario que .NET trae por defecto trata los casos .5
+///    de otra forma y produce diferencias de un céntimo.
 ///
-/// 2. El total del comprobante es la SUMA de los valores ya redondeados de
-///    cada línea, no el redondeo de la suma sin redondear. Si se hace al revés
-///    aparecen descuadres de céntimos en facturas con muchos ítems.
+/// 2. El total es la SUMA de los valores ya redondeados de cada línea,
+///    no el redondeo de la suma sin redondear. Al revés aparecen descuadres
+///    en comprobantes con muchos ítems.
 /// </summary>
 public static class CalculadoraTotales
 {
     public static decimal Redondear(decimal valor) =>
         Math.Round(valor, 2, MidpointRounding.AwayFromZero);
 
-    public static LineaCalculada CalcularLinea(LineaFactura linea)
+    public static LineaCalculada CalcularLinea(LineaComprobante linea)
     {
         var valorVenta = Redondear(linea.Cantidad * linea.ValorUnitario);
 
@@ -28,7 +30,6 @@ public static class CalculadoraTotales
             ? Redondear(valorVenta * linea.PorcentajeIgv / 100m)
             : 0m;
 
-        // Precio unitario que ve el cliente, con IGV incluido.
         var precioUnitarioConIgv = linea.Cantidad == 0
             ? 0m
             : Redondear((valorVenta + igv) / linea.Cantidad);
@@ -36,12 +37,12 @@ public static class CalculadoraTotales
         return new LineaCalculada(linea, valorVenta, igv, precioUnitarioConIgv);
     }
 
-    public static IReadOnlyList<LineaCalculada> CalcularLineas(Factura factura) =>
-        factura.Lineas.Select(CalcularLinea).ToList();
+    public static IReadOnlyList<LineaCalculada> CalcularLineas(ComprobanteBase comprobante) =>
+        comprobante.Lineas.Select(CalcularLinea).ToList();
 
-    public static TotalesFactura Calcular(Factura factura)
+    public static TotalesComprobante Calcular(ComprobanteBase comprobante)
     {
-        var calculadas = CalcularLineas(factura);
+        var calculadas = CalcularLineas(comprobante);
 
         decimal gravado = 0, exonerado = 0, inafecto = 0, gratuito = 0, igv = 0;
 
@@ -51,8 +52,8 @@ public static class CalculadoraTotales
 
             if (AfectacionIgv.EsGratuita(afectacion))
             {
-                gratuito += c.ValorVenta;
                 // El IGV de operaciones gratuitas se declara pero no se cobra.
+                gratuito += c.ValorVenta;
                 continue;
             }
 
@@ -77,11 +78,10 @@ public static class CalculadoraTotales
             }
         }
 
-        // Base imponible total (no incluye las operaciones gratuitas).
         var valorVenta = Redondear(gravado + exonerado + inafecto);
         var importeTotal = Redondear(valorVenta + igv);
 
-        return new TotalesFactura(
+        return new TotalesComprobante(
             TotalGravado:   Redondear(gravado),
             TotalExonerado: Redondear(exonerado),
             TotalInafecto:  Redondear(inafecto),

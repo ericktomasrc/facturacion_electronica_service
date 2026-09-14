@@ -5,101 +5,52 @@ using static Facturacion.Cpe.NumeroALetras;
 namespace Facturacion.Cpe;
 
 /// <summary>
-/// Genera el XML UBL 2.1 de una factura.
+/// Bloques XML que comparten factura, boleta, nota de crédito y nota de débito.
 ///
-/// ADVERTENCIA SOBRE EL ORDEN: en UBL el orden de los elementos NO es libre.
-/// El XSD define una secuencia estricta y cualquier nodo fuera de lugar
-/// invalida el documento completo. El orden de este archivo está tomado del
-/// esquema y no debe reordenarse "por prolijidad".
+/// POR QUÉ EXISTE ESTA CLASE: los cuatro documentos coinciden en cerca del 80%
+/// de su contenido (emisor, receptor, impuestos, líneas de detalle). Mantener
+/// cuatro copias de esos bloques significa que cada cambio de SUNAT hay que
+/// aplicarlo cuatro veces, y que tarde o temprano se desincronizan.
 ///
-/// El nodo ext:ExtensionContent se deja VACÍO a propósito: ahí entra la firma
-/// en el paso 2. No se toca desde aquí.
+/// Este refactor es lo que hace que agregar el quinto y el sexto documento
+/// cueste casi nada.
 /// </summary>
-public static class GeneradorFacturaXml
+internal static class BloquesComunes
 {
-    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+    internal static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
-    public static XDocument Generar(Factura f)
-    {
-        var totales = CalculadoraTotales.Calcular(f);
-        var lineas = CalculadoraTotales.CalcularLineas(f);
-
-        var raiz = new XElement(Ns.Invoice + "Invoice",
-            new XAttribute(XNamespace.Xmlns + "cac", Ns.Cac.NamespaceName),
-            new XAttribute(XNamespace.Xmlns + "cbc", Ns.Cbc.NamespaceName),
-            new XAttribute(XNamespace.Xmlns + "ext", Ns.Ext.NamespaceName),
-            new XAttribute(XNamespace.Xmlns + "ds",  Ns.Ds.NamespaceName),
-
-            // 1. Contenedor de la firma. Se deja vacío hasta el paso 2.
-            ExtensionesVacias(),
-
-            // 2. Identificación del documento
-            new XElement(Ns.Cbc + "UBLVersionID", "2.1"),
-            new XElement(Ns.Cbc + "CustomizationID", "2.0"),
-            new XElement(Ns.Cbc + "ID", f.NumeroCompleto),
-            new XElement(Ns.Cbc + "IssueDate", f.FechaEmision.ToString("yyyy-MM-dd", Inv)),
-            new XElement(Ns.Cbc + "IssueTime", f.FechaEmision.ToString("HH:mm:ss", Inv)),
-
-            new XElement(Ns.Cbc + "InvoiceTypeCode",
-                new XAttribute("listID", f.TipoOperacion),
-                new XAttribute("listAgencyName", "PE:SUNAT"),
-                new XAttribute("listName", "Tipo de Documento"),
-                new XAttribute("listURI", CatalogoUri.C01_TipoDocumento),
-                f.TipoComprobante),
-
-            // Leyenda obligatoria: importe en letras (código 1000)
-            new XElement(Ns.Cbc + "Note",
-                new XAttribute("languageLocaleID", "1000"),
-                new XCData(Leyenda(totales.ImporteTotal, f.Moneda))),
-
-            new XElement(Ns.Cbc + "DocumentCurrencyCode", f.Moneda),
-
-            // 3. Declaración de quién firma
-            BloqueSignature(f),
-
-            // 4. Emisor y receptor
-            BloqueEmisor(f.Emisor),
-            BloqueReceptor(f.Receptor),
-
-            // 5. Forma de pago
-            new XElement(Ns.Cac + "PaymentTerms",
-                new XElement(Ns.Cbc + "ID", "FormaPago"),
-                new XElement(Ns.Cbc + "PaymentMeansID", f.FormaPago)),
-
-            // 6. Totales de impuestos
-            BloqueTaxTotal(f, totales),
-
-            // 7. Totales monetarios
-            BloqueLegalMonetaryTotal(f, totales)
-        );
-
-        // 8. Detalle, una línea por ítem
-        foreach (var linea in lineas)
-            raiz.Add(BloqueInvoiceLine(f, linea));
-
-        return new XDocument(new XDeclaration("1.0", "UTF-8", null), raiz);
-    }
-
-    // ---------------------------------------------------------------- bloques
-
-    private static XElement ExtensionesVacias() =>
+    /// <summary>Contenedor donde el firmador insertará la firma. Se deja vacío.</summary>
+    internal static XElement ExtensionesVacias() =>
         new(Ns.Ext + "UBLExtensions",
             new XElement(Ns.Ext + "UBLExtension",
                 new XElement(Ns.Ext + "ExtensionContent")));
 
-    private static XElement BloqueSignature(Factura f) =>
+    internal static XElement UblVersion() =>
+        new(Ns.Cbc + "UBLVersionID", "2.1");
+
+    internal static XElement CustomizationId() =>
+        new(Ns.Cbc + "CustomizationID", "2.0");
+
+    /// <summary>Leyenda obligatoria con el importe en letras (código 1000).</summary>
+    internal static XElement LeyendaImporte(decimal importeTotal, string moneda) =>
+        new(Ns.Cbc + "Note",
+            new XAttribute("languageLocaleID", "1000"),
+            new XCData(Leyenda(importeTotal, moneda)));
+
+    /// <summary>Declaración de quién firma el documento.</summary>
+    internal static XElement Signature(ComprobanteBase c) =>
         new(Ns.Cac + "Signature",
-            new XElement(Ns.Cbc + "ID", f.NumeroCompleto),
+            new XElement(Ns.Cbc + "ID", c.NumeroCompleto),
             new XElement(Ns.Cac + "SignatoryParty",
                 new XElement(Ns.Cac + "PartyIdentification",
-                    new XElement(Ns.Cbc + "ID", f.Emisor.Ruc)),
+                    new XElement(Ns.Cbc + "ID", c.Emisor.Ruc)),
                 new XElement(Ns.Cac + "PartyName",
-                    new XElement(Ns.Cbc + "Name", new XCData(f.Emisor.RazonSocial)))),
+                    new XElement(Ns.Cbc + "Name", new XCData(c.Emisor.RazonSocial)))),
             new XElement(Ns.Cac + "DigitalSignatureAttachment",
                 new XElement(Ns.Cac + "ExternalReference",
                     new XElement(Ns.Cbc + "URI", "#SignatureSP"))));
 
-    private static XElement BloqueEmisor(Emisor e) =>
+    internal static XElement Emisor(Emisor e) =>
         new(Ns.Cac + "AccountingSupplierParty",
             new XElement(Ns.Cac + "Party",
                 new XElement(Ns.Cac + "PartyIdentification",
@@ -135,11 +86,12 @@ public static class GeneradorFacturaXml
                         new XElement(Ns.Cac + "Country",
                             new XElement(Ns.Cbc + "IdentificationCode",
                                 new XAttribute("listID", "ISO 3166-1"),
-                                new XAttribute("listAgencyName", "United Nations Economic Commission for Europe"),
+                                new XAttribute("listAgencyName",
+                                    "United Nations Economic Commission for Europe"),
                                 new XAttribute("listName", "Country"),
                                 e.CodigoPais))))));
 
-    private static XElement BloqueReceptor(Receptor r) =>
+    internal static XElement Receptor(Receptor r) =>
         new(Ns.Cac + "AccountingCustomerParty",
             new XElement(Ns.Cac + "Party",
                 new XElement(Ns.Cac + "PartyIdentification",
@@ -158,26 +110,27 @@ public static class GeneradorFacturaXml
                             new XElement(Ns.Cac + "AddressLine",
                                 new XElement(Ns.Cbc + "Line", new XCData(r.Direccion)))))));
 
-    private static XElement BloqueTaxTotal(Factura f, TotalesFactura t)
+    /// <summary>Totales de impuestos del comprobante completo.</summary>
+    internal static XElement TaxTotal(string moneda, TotalesComprobante t)
     {
         var nodo = new XElement(Ns.Cac + "TaxTotal",
             new XElement(Ns.Cbc + "TaxAmount",
-                new XAttribute("currencyID", f.Moneda), F2(t.TotalIgv)));
+                new XAttribute("currencyID", moneda), F2(t.TotalIgv)));
 
         if (t.TotalGravado > 0)
-            nodo.Add(Subtotal(f.Moneda, t.TotalGravado, t.TotalIgv,
+            nodo.Add(TaxSubtotal(moneda, t.TotalGravado, t.TotalIgv,
                 AfectacionIgv.GravadoOperacionOnerosa));
 
         if (t.TotalExonerado > 0)
-            nodo.Add(Subtotal(f.Moneda, t.TotalExonerado, 0m, AfectacionIgv.Exonerado));
+            nodo.Add(TaxSubtotal(moneda, t.TotalExonerado, 0m, AfectacionIgv.Exonerado));
 
         if (t.TotalInafecto > 0)
-            nodo.Add(Subtotal(f.Moneda, t.TotalInafecto, 0m, AfectacionIgv.Inafecto));
+            nodo.Add(TaxSubtotal(moneda, t.TotalInafecto, 0m, AfectacionIgv.Inafecto));
 
         return nodo;
     }
 
-    private static XElement Subtotal(
+    private static XElement TaxSubtotal(
         string moneda, decimal baseImponible, decimal impuesto, string afectacion)
     {
         var cat = AfectacionIgv.Categoria(afectacion);
@@ -197,25 +150,42 @@ public static class GeneradorFacturaXml
                     new XElement(Ns.Cbc + "TaxTypeCode", cat.TipoCodigo))));
     }
 
-    private static XElement BloqueLegalMonetaryTotal(Factura f, TotalesFactura t) =>
-        new(Ns.Cac + "LegalMonetaryTotal",
+    /// <summary>
+    /// Totales monetarios. El nombre del elemento cambia según el documento:
+    /// "LegalMonetaryTotal" en factura y nota de crédito,
+    /// "RequestedMonetaryTotal" en nota de débito.
+    /// </summary>
+    internal static XElement TotalesMonetarios(
+        string nombreElemento, string moneda, TotalesComprobante t) =>
+        new(Ns.Cac + nombreElemento,
             new XElement(Ns.Cbc + "LineExtensionAmount",
-                new XAttribute("currencyID", f.Moneda), F2(t.ValorVenta)),
+                new XAttribute("currencyID", moneda), F2(t.ValorVenta)),
             new XElement(Ns.Cbc + "TaxInclusiveAmount",
-                new XAttribute("currencyID", f.Moneda), F2(t.ImporteTotal)),
+                new XAttribute("currencyID", moneda), F2(t.ImporteTotal)),
             new XElement(Ns.Cbc + "PayableAmount",
-                new XAttribute("currencyID", f.Moneda), F2(t.ImporteTotal)));
+                new XAttribute("currencyID", moneda), F2(t.ImporteTotal)));
 
-    private static XElement BloqueInvoiceLine(Factura f, LineaCalculada c)
+    /// <summary>
+    /// Línea de detalle. Los nombres cambian por documento:
+    ///   Factura      → InvoiceLine    / InvoicedQuantity
+    ///   NotaCrédito  → CreditNoteLine / CreditedQuantity
+    ///   NotaDébito   → DebitNoteLine  / DebitedQuantity
+    /// El contenido interno es idéntico en los tres.
+    /// </summary>
+    internal static XElement Linea(
+        string nombreLinea,
+        string nombreCantidad,
+        string moneda,
+        LineaCalculada c)
     {
         var l = c.Linea;
         var cat = AfectacionIgv.Categoria(l.TipoAfectacionIgv);
         var esGratuita = AfectacionIgv.EsGratuita(l.TipoAfectacionIgv);
 
-        return new XElement(Ns.Cac + "InvoiceLine",
+        return new XElement(Ns.Cac + nombreLinea,
             new XElement(Ns.Cbc + "ID", l.Numero),
 
-            new XElement(Ns.Cbc + "InvoicedQuantity",
+            new XElement(Ns.Cbc + nombreCantidad,
                 new XAttribute("unitCode", l.UnidadMedida),
                 new XAttribute("unitCodeListID", "UN/ECE rec 20"),
                 new XAttribute("unitCodeListAgencyName",
@@ -223,14 +193,13 @@ public static class GeneradorFacturaXml
                 l.Cantidad.ToString("0.##########", Inv)),
 
             new XElement(Ns.Cbc + "LineExtensionAmount",
-                new XAttribute("currencyID", f.Moneda),
+                new XAttribute("currencyID", moneda),
                 F2(esGratuita ? 0m : c.ValorVenta)),
 
-            // Precio unitario de referencia, con IGV incluido
             new XElement(Ns.Cac + "PricingReference",
                 new XElement(Ns.Cac + "AlternativeConditionPrice",
                     new XElement(Ns.Cbc + "PriceAmount",
-                        new XAttribute("currencyID", f.Moneda),
+                        new XAttribute("currencyID", moneda),
                         F2(esGratuita ? 0m : c.PrecioUnitarioConIgv)),
                     new XElement(Ns.Cbc + "PriceTypeCode",
                         new XAttribute("listName", "Tipo de Precio"),
@@ -240,15 +209,14 @@ public static class GeneradorFacturaXml
                             ? TipoPrecio.ValorReferencialGratuito
                             : TipoPrecio.PrecioUnitarioIncluyeIgv))),
 
-            // Impuestos de la línea
             new XElement(Ns.Cac + "TaxTotal",
                 new XElement(Ns.Cbc + "TaxAmount",
-                    new XAttribute("currencyID", f.Moneda), F2(c.Igv)),
+                    new XAttribute("currencyID", moneda), F2(c.Igv)),
                 new XElement(Ns.Cac + "TaxSubtotal",
                     new XElement(Ns.Cbc + "TaxableAmount",
-                        new XAttribute("currencyID", f.Moneda), F2(c.ValorVenta)),
+                        new XAttribute("currencyID", moneda), F2(c.ValorVenta)),
                     new XElement(Ns.Cbc + "TaxAmount",
-                        new XAttribute("currencyID", f.Moneda), F2(c.Igv)),
+                        new XAttribute("currencyID", moneda), F2(c.Igv)),
                     new XElement(Ns.Cac + "TaxCategory",
                         new XElement(Ns.Cbc + "Percent", F2(l.PorcentajeIgv)),
                         new XElement(Ns.Cbc + "TaxExemptionReasonCode",
@@ -264,7 +232,6 @@ public static class GeneradorFacturaXml
                             new XElement(Ns.Cbc + "Name", cat.Nombre),
                             new XElement(Ns.Cbc + "TaxTypeCode", cat.TipoCodigo))))),
 
-            // Descripción del producto
             new XElement(Ns.Cac + "Item",
                 new XElement(Ns.Cbc + "Description", new XCData(l.Descripcion)),
                 string.IsNullOrWhiteSpace(l.CodigoProducto)
@@ -272,10 +239,18 @@ public static class GeneradorFacturaXml
                     : new XElement(Ns.Cac + "SellersItemIdentification",
                         new XElement(Ns.Cbc + "ID", l.CodigoProducto))),
 
-            // Valor unitario sin IGV
             new XElement(Ns.Cac + "Price",
                 new XElement(Ns.Cbc + "PriceAmount",
-                    new XAttribute("currencyID", f.Moneda),
+                    new XAttribute("currencyID", moneda),
                     l.ValorUnitario.ToString("F2", Inv))));
     }
+
+    /// <summary>Atributos de namespace comunes a todos los documentos.</summary>
+    internal static XAttribute[] Namespaces() =>
+    [
+        new XAttribute(XNamespace.Xmlns + "cac", Ns.Cac.NamespaceName),
+        new XAttribute(XNamespace.Xmlns + "cbc", Ns.Cbc.NamespaceName),
+        new XAttribute(XNamespace.Xmlns + "ext", Ns.Ext.NamespaceName),
+        new XAttribute(XNamespace.Xmlns + "ds",  Ns.Ds.NamespaceName)
+    ];
 }

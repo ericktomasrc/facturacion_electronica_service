@@ -10,9 +10,10 @@
   <ItemGroup>
     <ProjectReference Include="..\Facturacion.Cpe\Facturacion.Cpe.csproj" />
   </ItemGroup>
-  
+
   <ItemGroup>
-  <None Include="xsd\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="xsd\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="certificado.pfx" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

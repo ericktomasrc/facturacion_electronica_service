@@ -1,40 +1,109 @@
 namespace Facturacion.Cpe;
 
 /// <summary>
-/// Modelo de dominio de una factura. No sabe nada de XML.
-/// Esta separación es deliberada: el mismo modelo alimentará el generador de XML,
-/// el de PDF y las validaciones, sin que ninguno dependa del otro.
+/// Lo que comparten todos los comprobantes electrónicos.
+///
+/// Se extrae una base común porque factura, nota de crédito y nota de débito
+/// coinciden en casi todo: emisor, receptor, líneas, moneda y numeración.
+/// Lo que cambia es el documento XML que se genera y unos pocos bloques propios.
 /// </summary>
-public class Factura
+public abstract class ComprobanteBase
 {
-    public string Serie { get; set; } = "F001";
+    public string Serie { get; set; } = "";
     public int Correlativo { get; set; }
     public DateTime FechaEmision { get; set; } = DateTime.Now;
-
-    /// <summary>Catálogo 01. Para factura siempre "01".</summary>
-    public string TipoComprobante { get; set; } = Cpe.TipoComprobante.Factura;
-
-    /// <summary>Catálogo 51. "0101" = venta interna.</summary>
-    public string TipoOperacion { get; set; } = "0101";
 
     /// <summary>ISO 4217. "PEN" = soles.</summary>
     public string Moneda { get; set; } = "PEN";
 
-    /// <summary>"Contado" o "Credito".</summary>
-    public string FormaPago { get; set; } = "Contado";
-
     public Emisor Emisor { get; set; } = new();
     public Receptor Receptor { get; set; } = new();
-    public List<LineaFactura> Lineas { get; set; } = [];
+    public List<LineaComprobante> Lineas { get; set; } = [];
+
+    /// <summary>Catálogo 01. Lo define cada tipo concreto.</summary>
+    public abstract string TipoComprobante { get; }
 
     /// <summary>Identificador del comprobante: F001-00000001.</summary>
     public string NumeroCompleto => $"{Serie}-{Correlativo:D8}";
 
     /// <summary>
-    /// Nombre del archivo XML según la convención obligatoria de SUNAT.
-    /// Si este nombre está mal, el comprobante se rechaza aunque el XML sea correcto.
+    /// Nombre del archivo según la convención obligatoria de SUNAT.
+    /// Si está mal, el comprobante se rechaza aunque el XML sea correcto.
     /// </summary>
     public string NombreArchivo => $"{Emisor.Ruc}-{TipoComprobante}-{NumeroCompleto}";
+}
+
+/// <summary>Factura electrónica. Catálogo 01, código 01.</summary>
+public class Factura : ComprobanteBase
+{
+    public override string TipoComprobante => Cpe.TipoComprobante.Factura;
+
+    /// <summary>Catálogo 51. "0101" = venta interna.</summary>
+    public string TipoOperacion { get; set; } = "0101";
+
+    /// <summary>"Contado" o "Credito". Obligatorio en facturas.</summary>
+    public string FormaPago { get; set; } = "Contado";
+}
+
+/// <summary>Boleta de venta electrónica. Catálogo 01, código 03.</summary>
+public class Boleta : ComprobanteBase
+{
+    public override string TipoComprobante => Cpe.TipoComprobante.Boleta;
+
+    public string TipoOperacion { get; set; } = "0101";
+    public string FormaPago { get; set; } = "Contado";
+}
+
+/// <summary>
+/// Nota de crédito. Catálogo 01, código 07.
+///
+/// Disminuye o anula un comprobante ya emitido: devoluciones, descuentos
+/// posteriores, errores en el monto. Una vez que SUNAT acepta un comprobante
+/// no se puede modificar, así que esta es la única forma de corregirlo.
+///
+/// La serie debe empezar con la misma letra del documento que modifica:
+/// F para notas sobre facturas, B para notas sobre boletas.
+/// </summary>
+public class NotaCredito : ComprobanteBase
+{
+    public override string TipoComprobante => Cpe.TipoComprobante.NotaCredito;
+
+    /// <summary>Catálogo 09. Ver <see cref="MotivoNotaCredito"/>.</summary>
+    public string CodigoMotivo { get; set; } = MotivoNotaCredito.AnulacionDeLaOperacion;
+
+    /// <summary>Texto libre que explica el motivo. Lo lee una persona.</summary>
+    public string DescripcionMotivo { get; set; } = "";
+
+    /// <summary>El comprobante que esta nota modifica.</summary>
+    public DocumentoAfectado Afectado { get; set; } = new();
+}
+
+/// <summary>
+/// Nota de débito. Catálogo 01, código 08.
+///
+/// Aumenta el importe de un comprobante ya emitido: intereses por mora,
+/// penalidades, aumento de valor.
+/// </summary>
+public class NotaDebito : ComprobanteBase
+{
+    public override string TipoComprobante => Cpe.TipoComprobante.NotaDebito;
+
+    /// <summary>Catálogo 10. Ver <see cref="MotivoNotaDebito"/>.</summary>
+    public string CodigoMotivo { get; set; } = MotivoNotaDebito.InteresPorMora;
+
+    public string DescripcionMotivo { get; set; } = "";
+
+    public DocumentoAfectado Afectado { get; set; } = new();
+}
+
+/// <summary>Referencia al comprobante que una nota modifica.</summary>
+public class DocumentoAfectado
+{
+    /// <summary>Serie y correlativo del documento original. Ej: F001-00000001</summary>
+    public string Numero { get; set; } = "";
+
+    /// <summary>Catálogo 01. "01" si modifica una factura, "03" una boleta.</summary>
+    public string TipoDocumento { get; set; } = TipoComprobante.Factura;
 }
 
 public class Emisor
@@ -67,7 +136,11 @@ public class Receptor
     public string Direccion { get; set; } = "";
 }
 
-public class LineaFactura
+/// <summary>
+/// Una línea de detalle. Es idéntica en factura, boleta y notas,
+/// por eso no lleva el nombre del documento.
+/// </summary>
+public class LineaComprobante
 {
     /// <summary>Número de orden dentro del comprobante, empezando en 1.</summary>
     public int Numero { get; set; }
@@ -86,15 +159,14 @@ public class LineaFactura
     /// <summary>Catálogo 07.</summary>
     public string TipoAfectacionIgv { get; set; } = AfectacionIgv.GravadoOperacionOnerosa;
 
-    /// <summary>Porcentaje del IGV vigente.</summary>
     public decimal PorcentajeIgv { get; set; } = 18m;
 }
 
 /// <summary>
-/// Totales calculados de la factura. Se generan, no se capturan:
-/// permitir que entren desde afuera es la forma más rápida de que no cuadren.
+/// Totales calculados. Se generan, no se capturan: permitir que entren
+/// desde afuera es la forma más rápida de que no cuadren con las líneas.
 /// </summary>
-public record TotalesFactura(
+public record TotalesComprobante(
     decimal TotalGravado,
     decimal TotalExonerado,
     decimal TotalInafecto,
@@ -103,9 +175,9 @@ public record TotalesFactura(
     decimal ValorVenta,
     decimal ImporteTotal);
 
-/// <summary>Resultado del cálculo por línea.</summary>
+/// <summary>Resultado del cálculo de una línea.</summary>
 public record LineaCalculada(
-    LineaFactura Linea,
+    LineaComprobante Linea,
     decimal ValorVenta,
     decimal Igv,
     decimal PrecioUnitarioConIgv);
