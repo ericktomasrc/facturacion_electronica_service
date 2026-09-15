@@ -5,20 +5,27 @@ using Facturacion.Cpe;
 using Facturacion.Persistencia;
 using Microsoft.OpenApi.Models;
 
+// Los secretos se leen del entorno, no de appsettings.json.
+//
+// En desarrollo vienen de un archivo .env en la raíz de la solución, que
+// está en el .gitignore. En producción los pone el contenedor o el gestor
+// de secretos, y este código no cambia.
+ConfiguracionSecretos.CargarArchivoEnv();
+
 var builder = WebApplication.CreateBuilder(args);
 
 // --- Servicios -------------------------------------------------------------
 
-var cadenaConexion = builder.Configuration.GetConnectionString("Facturacion")
-    ?? throw new InvalidOperationException(
-        "Falta la cadena de conexión 'Facturacion' en appsettings.json.");
+var cadenaConexion = ConfiguracionSecretos.CadenaPostgres(
+    "facturacion_app", "FACTURACION_APP_PASSWORD",
+    "la conexión de la aplicación, sujeta a Row Level Security");
 
 // El diagnóstico mira TODAS las empresas, así que usa el rol de operador.
 // Es una vista de infraestructura, no de cliente, y por eso su endpoint
 // está protegido con una clave distinta.
-var cadenaOperador = builder.Configuration.GetConnectionString("FacturacionOperador")
-    ?? throw new InvalidOperationException(
-        "Falta la cadena 'FacturacionOperador' en appsettings.json.");
+var cadenaOperador = ConfiguracionSecretos.CadenaPostgres(
+    "facturacion_operador", "FACTURACION_OPERADOR_PASSWORD",
+    "las consultas del panel, que ven todas las empresas");
 
 builder.Services.AddSingleton(new FabricaSesiones(cadenaConexion));
 builder.Services.AddSingleton(new RepositorioDiagnostico(cadenaOperador));
@@ -35,6 +42,16 @@ builder.Services.AddSingleton<RepositorioComprobantes>();
 // desde qué máquina corran.
 var opcionesAlmacen = new OpcionesAlmacen();
 builder.Configuration.GetSection("Almacen").Bind(opcionesAlmacen);
+
+// Las credenciales del almacén también son secretos.
+if (opcionesAlmacen.Tipo.Equals("s3", StringComparison.OrdinalIgnoreCase))
+{
+    opcionesAlmacen.Usuario = ConfiguracionSecretos.Exigir(
+        "ALMACEN_USUARIO", "el acceso al almacén de comprobantes");
+
+    opcionesAlmacen.Clave = ConfiguracionSecretos.Exigir(
+        "ALMACEN_CLAVE", "el acceso al almacén de comprobantes");
+}
 
 builder.Services.AddSingleton(opcionesAlmacen);
 builder.Services.AddSingleton(FabricaAlmacen.Crear(opcionesAlmacen));
@@ -91,12 +108,14 @@ builder.Services.AddSwaggerGen(opciones =>
             "Toda petición requiere una clave de acceso.\n\n" +
             "**Emisión y consulta** (`/v1/*`): la clave determina qué empresa " +
             "emite, así que el RUC del emisor NO se envía en el cuerpo. " +
-            "En Authorize, campo `ApiKey`, escribe:\n\n" +
-            "`Bearer fac_dev_UkV5QkFOX0RFU0FSUk9MTE9fMjAyNg`\n\n" +
+            "En Authorize, campo `ApiKey`, escribe `Bearer` seguido de la " +
+            "clave que se le entregó a esa empresa.\n\n" +
             "**Administración** (`/admin/*`): usa la clave del operador, que " +
             "es distinta porque da acceso a los datos de todas las empresas. " +
-            "En Authorize, campo `AdminKey`, escribe solo:\n\n" +
-            "`operador-dev-2026`"
+            "En Authorize, campo `AdminKey`, escribe solo la clave, sin " +
+            "prefijo. Es el valor de la variable `ADMIN_CLAVE`.\n\n" +
+            "Ninguna clave aparece en esta documentación a propósito: si " +
+            "estuviera aquí, estaría también en el repositorio."
     });
 
     // DOS ESQUEMAS DE AUTENTICACIÓN, Y ES A PROPÓSITO.

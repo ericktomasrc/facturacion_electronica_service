@@ -2,12 +2,16 @@ using Facturacion.Persistencia;
 using Facturacion.Worker;
 using Microsoft.Extensions.Logging;
 
+// Los secretos se leen del entorno, no de appsettings.json.
+ConfiguracionSecretos.CargarArchivoEnv();
+
 var builder = Host.CreateApplicationBuilder(args);
 
 // --- Configuración ---------------------------------------------------------
 
-var cadenaApp = builder.Configuration.GetConnectionString("Facturacion")
-    ?? throw new InvalidOperationException("Falta la cadena 'Facturacion'.");
+var cadenaApp = ConfiguracionSecretos.CadenaPostgres(
+    "facturacion_app", "FACTURACION_APP_PASSWORD",
+    "procesar cada comprobante dentro de la sesión de su empresa");
 
 // El worker necesita DOS conexiones con roles distintos:
 //
@@ -20,13 +24,23 @@ var cadenaApp = builder.Configuration.GetConnectionString("Facturacion")
 // Reclamar y procesar con el mismo rol privilegiado sería más simple y
 // mucho peor: un error de código podría escribir en la empresa equivocada
 // sin que nada lo impida.
-var cadenaOperador = builder.Configuration.GetConnectionString("FacturacionOperador")
-    ?? throw new InvalidOperationException("Falta la cadena 'FacturacionOperador'.");
+var cadenaOperador = ConfiguracionSecretos.CadenaPostgres(
+    "facturacion_operador", "FACTURACION_OPERADOR_PASSWORD",
+    "reclamar trabajo de todas las empresas");
 
 // El almacén se construye desde la configuración: disco en desarrollo,
 // S3 en cuanto se apunte a MinIO o a una nube. El código es el mismo.
 var opcionesAlmacen = new OpcionesAlmacen();
 builder.Configuration.GetSection("Almacen").Bind(opcionesAlmacen);
+
+if (opcionesAlmacen.Tipo.Equals("s3", StringComparison.OrdinalIgnoreCase))
+{
+    opcionesAlmacen.Usuario = ConfiguracionSecretos.Exigir(
+        "ALMACEN_USUARIO", "el acceso al almacén de comprobantes");
+
+    opcionesAlmacen.Clave = ConfiguracionSecretos.Exigir(
+        "ALMACEN_CLAVE", "el acceso al almacén de comprobantes");
+}
 
 // --- Servicios -------------------------------------------------------------
 

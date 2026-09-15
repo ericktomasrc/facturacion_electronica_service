@@ -99,13 +99,14 @@ public sealed class FiltroClaveOperador : IEndpointFilter
 {
     private readonly string _clave;
 
-    public FiltroClaveOperador(IConfiguration configuracion)
+    public FiltroClaveOperador()
     {
-        _clave = configuracion["Admin:Clave"]
-            ?? throw new InvalidOperationException(
-                "Falta Admin:Clave en la configuración. Sin ella, los endpoints " +
-                "de operación quedarían abiertos, y muestran datos de todas las " +
-                "empresas.");
+        // Del entorno, no de appsettings.json: es un secreto, y ese archivo
+        // se versiona. Si falta, el proceso no arranca. La alternativa —dejar
+        // los endpoints abiertos— expondría los datos de todas las empresas.
+        _clave = ConfiguracionSecretos.Exigir(
+            "ADMIN_CLAVE",
+            "proteger los endpoints de operación, que ven todas las empresas");
     }
 
     public async ValueTask<object?> InvokeAsync(
@@ -114,7 +115,13 @@ public sealed class FiltroClaveOperador : IEndpointFilter
     {
         var recibida = contexto.HttpContext.Request.Headers["X-Admin-Key"].ToString();
 
-        if (string.IsNullOrWhiteSpace(recibida) || recibida != _clave)
+        // COMPARACIÓN EN TIEMPO CONSTANTE.
+        //
+        // Comparar con != se detiene en el primer carácter distinto, así que
+        // el tiempo de respuesta revela cuántos caracteres se acertaron.
+        // Midiendo esas diferencias se puede deducir la clave carácter a
+        // carácter, sin necesidad de adivinarla entera.
+        if (string.IsNullOrWhiteSpace(recibida) || !SonIguales(recibida, _clave))
         {
             return Results.Json(
                 new RespuestaError(
@@ -125,4 +132,9 @@ public sealed class FiltroClaveOperador : IEndpointFilter
 
         return await siguiente(contexto);
     }
+
+    private static bool SonIguales(string a, string b) =>
+        System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+            System.Text.Encoding.UTF8.GetBytes(a),
+            System.Text.Encoding.UTF8.GetBytes(b));
 }

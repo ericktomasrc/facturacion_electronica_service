@@ -384,3 +384,8 @@ INSERT INTO tenants (ruc, razon_social, nombre_comercial, direccion,
 VALUES ('20601234567', 'MI EMPRESA SAC', 'MI EMPRESA', 'AV. EJEMPLO 123',
         'LIMA', 'LIMA', 'LIMA', 'beta',
         'MODDATOS', 3);
+
+
+-- NOTA: las contraseñas de este archivo son las iniciales y YA NO SON VÁLIDAS.
+-- Se cambiaron con ALTER ROLE y ahora viven en el .env. Una migración es un
+-- registro histórico de cómo quedó la base: se deja como está.

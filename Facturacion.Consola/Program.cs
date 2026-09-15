@@ -14,9 +14,15 @@ using Facturacion.Persistencia;
 // no es un bug: es un problema tributario.
 // ---------------------------------------------------------------------------
 
-const string CadenaConexion =
-    "Host=localhost;Port=5433;Database=facturacion;" +
-    "Username=facturacion_app;Password=cambiame_en_produccion";
+// La contraseña sale del entorno, no del código.
+//
+// Es un programa de pruebas, pero la regla vale igual: una contraseña
+// escrita aquí queda en el historial de Git para siempre.
+ConfiguracionSecretos.CargarArchivoEnv();
+
+string CadenaConexion = ConfiguracionSecretos.CadenaPostgres(
+    "facturacion_app", "FACTURACION_APP_PASSWORD",
+    "las pruebas contra la base desde la consola");
 
 const string RucEmisor = "20601234567";
 
