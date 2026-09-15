@@ -41,6 +41,7 @@ builder.Services.AddSingleton<IAlmacenArchivos>(
 
 // Administración de empresas, series y claves.
 builder.Services.AddSingleton(new RepositorioAdmin(cadenaOperador));
+builder.Services.AddSingleton(new RepositorioWebhooks(cadenaOperador));
 
 // La API necesita la llave maestra porque cifra los certificados al cargarlos.
 // Si falta la variable de entorno, el proceso no arranca: es preferible a
@@ -141,6 +142,7 @@ app.UseMiddleware<AutenticacionApiKey>();
 
 app.MapearDiagnostico();
 app.MapearAdministracion();
+app.MapearWebhooks();
 app.MapearNotas();
 app.MapearDescargas();
 

@@ -59,6 +59,22 @@ builder.Services.AddHostedService<ServicioWorker>();
 builder.Services.AddSingleton(new RepositorioResumenes(cadenaOperador));
 builder.Services.AddSingleton<ProcesadorResumenes>();
 
+// --- Webhooks --------------------------------------------------------------
+//
+// Van en su propio servicio porque su fallo NO debe afectar a la facturación:
+// que el servidor de un cliente esté caído no puede impedir que las facturas
+// de los demás lleguen a SUNAT.
+builder.Services.AddHttpClient("webhooks");
+builder.Services.AddSingleton(new RepositorioWebhooks(cadenaOperador));
+builder.Services.AddSingleton<DespachadorWebhooks>();
+
+builder.Services.AddSingleton<IHostedService>(proveedor =>
+    new ServicioWebhooks(
+        proveedor.GetRequiredService<DespachadorWebhooks>(),
+        proveedor.GetRequiredService<ILogger<ServicioWebhooks>>(),
+        TimeSpan.FromSeconds(
+            builder.Configuration.GetValue("Webhooks:IntervaloSegundos", 10))));
+
 builder.Services.AddSingleton<IHostedService>(proveedor =>
     new ServicioResumenes(
         proveedor.GetRequiredService<ProcesadorResumenes>(),
