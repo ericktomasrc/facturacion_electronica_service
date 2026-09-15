@@ -78,6 +78,7 @@ public sealed class ProcesadorComprobantes
     private readonly ColaTrabajos _cola;
     private readonly RepositorioComprobantes _comprobantes;
     private readonly AlmacenCertificados _certificados;
+    private readonly ProveedorCredenciales _credenciales;
     private readonly IAlmacenArchivos _archivos;
     private readonly ILogger<ProcesadorComprobantes> _log;
 
@@ -85,12 +86,14 @@ public sealed class ProcesadorComprobantes
         ColaTrabajos cola,
         RepositorioComprobantes comprobantes,
         AlmacenCertificados certificados,
+        ProveedorCredenciales credenciales,
         IAlmacenArchivos archivos,
         ILogger<ProcesadorComprobantes> log)
     {
         _cola = cola;
         _comprobantes = comprobantes;
         _certificados = certificados;
+        _credenciales = credenciales;
         _archivos = archivos;
         _log = log;
     }
@@ -136,7 +139,10 @@ public sealed class ProcesadorComprobantes
 
             // --- 3. Enviar a SUNAT -------------------------------------------
 
-            var configuracion = ResolverConfiguracion(tenant);
+            // Las credenciales las resuelve el proveedor: en beta usa las de
+            // pruebas, en producción descifra las del contribuyente. El worker
+            // no necesita saber cuál es cuál.
+            var configuracion = await _credenciales.ObtenerAsync(trabajo.TenantId, ct);
 
             var zip = EmpaquetadorZip.Comprimir(comprobante.NombreArchivo, bytesXml);
 
@@ -374,20 +380,6 @@ public sealed class ProcesadorComprobantes
             _ => throw new InvalidOperationException(
                 $"No hay generador para {comprobante.GetType().Name}")
         };
-
-    private static ConfiguracionSunat ResolverConfiguracion(TenantResuelto tenant)
-    {
-        if (!tenant.EsProduccion)
-            return ConfiguracionSunat.Beta(tenant.Ruc);
-
-        // En producción hacen falta las credenciales SOL reales del
-        // contribuyente, descifradas desde tenants.clave_sol_cifrada.
-        // Todavía no está implementado, y es mejor fallar claro que enviar
-        // a producción con credenciales de prueba.
-        throw new NotImplementedException(
-            "El envío a producción requiere descifrar las credenciales SOL " +
-            "del emisor. Falta implementarlo.");
-    }
 
     private static byte[] ObtenerBytes(System.Xml.XmlDocument doc)
     {

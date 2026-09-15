@@ -63,6 +63,91 @@ public static class EndpointsAdmin
         })
         .WithSummary("Activa, desactiva o ajusta la concurrencia");
 
+        // ------------------------------------------------- credenciales SOL
+
+        grupo.MapPost("/tenants/{id:guid}/credenciales-sol", async (
+            Guid id, CredencialesSol credenciales,
+            RepositorioAdmin admin, IProtectorDeSecretos protector,
+            CancellationToken ct) =>
+        {
+            if (credenciales.Usuario.Equals("MODDATOS", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.BadRequest(new RespuestaError(
+                    "MODDATOS es el usuario del ambiente de pruebas.",
+                    "Para producción hace falta el usuario SOL secundario real " +
+                    "del contribuyente."));
+            }
+
+            try
+            {
+                var guardadas = await admin.GuardarCredencialesSolAsync(
+                    id, credenciales.Usuario, credenciales.Clave, protector, ct);
+
+                return guardadas
+                    ? Results.Ok(new { mensaje = "Credenciales guardadas y cifradas." })
+                    : Results.NotFound(new RespuestaError("No se encontró la empresa."));
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new RespuestaError("Datos inválidos.", ex.Message));
+            }
+        })
+        .WithSummary("Guarda las credenciales SOL del contribuyente")
+        .WithDescription(
+            "La clave se cifra igual que el certificado.\n\n" +
+            "Debe ser el usuario SOL SECUNDARIO, nunca el principal: el " +
+            "principal puede declarar, pagar y modificar datos en el portal " +
+            "de SUNAT, y ese nivel de acceso no tiene por qué vivir aquí.");
+
+        grupo.MapGet("/tenants/{id:guid}/revision-produccion", async (
+            Guid id, ProveedorCredenciales credenciales, CancellationToken ct) =>
+            Results.Ok(await credenciales.RevisarAsync(id, ct)))
+            .WithSummary("Comprueba si la empresa puede pasar a producción")
+            .WithDescription(
+                "Revisa certificado, credenciales SOL y series. Pasar a " +
+                "producción sin alguno de ellos hace que todas las facturas " +
+                "de esa empresa fallen desde el primer minuto.");
+
+        grupo.MapPost("/tenants/{id:guid}/ambiente", async (
+            Guid id, CambioAmbiente cambio,
+            RepositorioAdmin admin, ProveedorCredenciales credenciales,
+            CancellationToken ct) =>
+        {
+            // Volver a beta siempre se permite: es la salida cuando algo va mal.
+            if (cambio.Ambiente == "beta")
+            {
+                var vuelto = await admin.CambiarAmbienteAsync(id, "beta", ct);
+
+                return vuelto
+                    ? Results.Ok(new { mensaje = "La empresa volvió al ambiente de pruebas." })
+                    : Results.NotFound(new RespuestaError("No se encontró la empresa."));
+            }
+
+            // Pasar a producción NO. Se comprueba antes.
+            var revision = await credenciales.RevisarAsync(id, ct);
+
+            if (!revision.Listo)
+            {
+                return Results.BadRequest(new RespuestaError(
+                    "La empresa todavía no puede pasar a producción.",
+                    string.Join(" ", revision.Faltantes)));
+            }
+
+            var cambiado = await admin.CambiarAmbienteAsync(id, "produccion", ct);
+
+            return cambiado
+                ? Results.Ok(new
+                {
+                    mensaje = "La empresa pasó a producción.",
+                    advertencias = revision.Advertencias
+                })
+                : Results.NotFound(new RespuestaError("No se encontró la empresa."));
+        })
+        .WithSummary("Cambia el ambiente de la empresa")
+        .WithDescription(
+            "Pasar a producción exige superar la revisión previa. Volver a " +
+            "beta siempre se permite: es la salida cuando algo va mal.");
+
         // -------------------------------------------------------- certificados
 
         grupo.MapPost("/tenants/{id:guid}/certificado", async (
@@ -257,3 +342,7 @@ public record NuevaSerie(
 public record NuevaClave(string Nombre, bool Produccion = false);
 
 public record CambioEstadoSerie(bool Activo);
+
+public record CredencialesSol(string Usuario, string Clave);
+
+public record CambioAmbiente(string Ambiente);

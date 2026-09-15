@@ -290,6 +290,7 @@ const estado = {
   certificados: [],
   webhooks: [],
   entregas: [],
+  revision: null,
 
   // Identificador de lo recién creado en cada pestaña, para resaltarlo.
   recien: { series:null, claves:null, certificado:null, webhooks:null },
@@ -503,7 +504,7 @@ function pintarDetalle() {
     </div>
 
     <div class="pestanas">
-      ${["series","claves","certificado","webhooks"].map(p => `
+      ${["series","claves","certificado","webhooks","produccion"].map(p => `
         <button class="pestana ${estado.pestana === p ? "activa" : ""}"
                 data-pestana="${p}">${nombrePestana(p)}</button>`).join("")}
     </div>
@@ -525,7 +526,8 @@ const nombrePestana = p => ({
   series: "Series",
   claves: "Claves de acceso",
   certificado: "Certificado",
-  webhooks: "Webhooks"
+  webhooks: "Webhooks",
+  produccion: "Producción"
 }[p]);
 
 function estadoCertificado(t) {
@@ -570,6 +572,14 @@ async function cargarPestana() {
         elem("tabla-claves").innerHTML = tablaClaves();
         enlazarRevocar();
       });
+
+    } else if (estado.pestana === "produccion") {
+      estado.revision = await api(`/admin/tenants/${id}/revision-produccion`);
+
+      cuerpo.innerHTML = vistaProduccion();
+
+      elem("btn-sol").onclick = guardarCredenciales;
+      elem("btn-ambiente").onclick = cambiarAmbiente;
 
     } else if (estado.pestana === "webhooks") {
       estado.webhooks = await api(`/admin/tenants/${id}/webhooks`);
@@ -887,6 +897,151 @@ function filtrar(clave) {
     return estado.webhooks.filter(x => coincide(x, f, x.eventos ?? []));
 
   return estado.certificados.filter(x => coincide(x, f));
+}
+
+function vistaProduccion() {
+  const t = estado.seleccionada;
+  const r = estado.revision;
+
+  return `
+    <div style="background:var(--sutil);border-radius:var(--radio);
+                padding:13px 15px;margin-bottom:18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;
+                  gap:12px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:14px">Ambiente actual:
+            <strong>${t.ambiente === "produccion" ? "Producción" : "Beta (pruebas)"}</strong>
+          </div>
+          <div class="tenue" style="font-size:12.5px;margin-top:2px">
+            ${t.ambiente === "produccion"
+              ? "Los comprobantes van a SUNAT de verdad y tienen valor legal."
+              : "Los comprobantes van al ambiente de pruebas y no tienen validez."}
+          </div>
+        </div>
+        <button id="btn-ambiente" class="${t.ambiente === "produccion" ? "" : "principal"}">
+          ${t.ambiente === "produccion" ? "Volver a pruebas" : "Pasar a producción"}
+        </button>
+      </div>
+    </div>
+
+    <h2>Credenciales SOL</h2>
+    <div class="rejilla" style="margin-top:0">
+      <label>Usuario SOL secundario
+        <input id="s-usuario" placeholder="FACTURA01"
+               value="${esc(t.usuarioSol && t.usuarioSol !== "MODDATOS" ? t.usuarioSol : "")}">
+        <div class="err" id="e-usuario"></div></label>
+      <label>Clave SOL
+        <input id="s-clave" type="password"
+               placeholder="${t.tieneClaveSol ? "•••••• (guardada)" : "la del usuario secundario"}">
+      </label>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">
+      <button id="btn-sol">Guardar credenciales</button>
+      <span class="tenue" style="font-size:12.5px">
+        La clave se cifra igual que el certificado.
+      </span>
+    </div>
+
+    <div class="tenue" style="font-size:12.5px;margin-bottom:22px;
+                              border-left:2px solid var(--borde);padding-left:11px">
+      Debe ser el usuario SOL <strong>secundario</strong> del contribuyente,
+      nunca el principal. El principal puede declarar, pagar y modificar datos
+      en el portal de SUNAT, y ese nivel de acceso no tiene por qué vivir aquí.
+    </div>
+
+    <h2>Revisión previa</h2>
+    ${r.listo
+      ? `<div class="secreto">Todo listo. Esta empresa puede emitir en producción.</div>`
+      : `<div style="background:var(--mal-fondo);border:1px solid var(--mal);
+                     border-radius:var(--radio);padding:13px 15px">
+           <strong style="color:var(--mal)">Falta lo siguiente:</strong>
+           <ul style="margin:8px 0 0;padding-left:20px;font-size:13.5px">
+             ${r.faltantes.map(f => `<li>${esc(f)}</li>`).join("")}
+           </ul>
+         </div>`}
+
+    ${r.advertencias.length === 0 ? "" : `
+      <div style="background:var(--aviso-fondo);border:1px solid var(--aviso);
+                  border-radius:var(--radio);padding:13px 15px;margin-top:12px">
+        <strong style="color:var(--aviso)">Conviene revisar:</strong>
+        <ul style="margin:8px 0 0;padding-left:20px;font-size:13.5px">
+          ${r.advertencias.map(a => `<li>${esc(a)}</li>`).join("")}
+        </ul>
+      </div>`}`;
+}
+
+async function guardarCredenciales() {
+  const usuario = elem("s-usuario").value.trim();
+  const clave = elem("s-clave").value;
+
+  elem("e-usuario").textContent = "";
+
+  if (!usuario) {
+    elem("e-usuario").textContent = "Escribe el usuario SOL.";
+    return;
+  }
+
+  if (!clave) {
+    avisar("Falta la clave SOL",
+           "Escríbela aunque ya hubiera una guardada: no se puede leer.", "mal");
+    return;
+  }
+
+  const boton = elem("btn-sol");
+  boton.disabled = true;
+
+  try {
+    await api(`/admin/tenants/${estado.seleccionada.id}/credenciales-sol`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ usuario, clave })
+    });
+
+    avisar("Credenciales guardadas y cifradas", "", "ok");
+
+    elem("s-clave").value = "";
+    await recargar();
+
+  } catch (e) {
+    avisar(e.message, e.detalle, "mal");
+  } finally {
+    boton.disabled = false;
+  }
+}
+
+async function cambiarAmbiente() {
+  const t = estado.seleccionada;
+  const aProduccion = t.ambiente !== "produccion";
+
+  const seguro = await confirmar(
+    aProduccion ? "Pasar a producción" : "Volver al ambiente de pruebas",
+
+    aProduccion
+      ? `${t.razonSocial} empezará a emitir comprobantes REALES ante SUNAT, ` +
+        "con valor legal. Los correlativos que consuma no se pueden recuperar."
+      : `${t.razonSocial} volverá a emitir contra el ambiente de pruebas. ` +
+        "Los comprobantes que emita dejarán de tener validez legal.",
+
+    aProduccion ? "Pasar a producción" : "Volver a pruebas");
+
+  if (!seguro) return;
+
+  try {
+    const r = await api(`/admin/tenants/${t.id}/ambiente`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ambiente: aProduccion ? "produccion" : "beta" })
+    });
+
+    avisar(r.mensaje,
+           r.advertencias?.length ? r.advertencias.join(" ") : "", "ok");
+
+    await recargar();
+
+  } catch (e) {
+    avisar(e.message, e.detalle, "mal");
+  }
 }
 
 function vistaWebhooks() {

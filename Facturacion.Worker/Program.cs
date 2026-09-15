@@ -35,6 +35,13 @@ builder.Services.AddSingleton(new ColaTrabajos(cadenaOperador));
 builder.Services.AddSingleton<RepositorioComprobantes>();
 builder.Services.AddSingleton<IProtectorDeSecretos>(_ => ProtectorAesGcm.DesdeEntorno());
 builder.Services.AddSingleton<AlmacenCertificados>();
+
+// Resuelve las credenciales de SUNAT según el ambiente de cada empresa.
+// En beta, las de pruebas; en producción, las del contribuyente descifradas.
+builder.Services.AddSingleton(proveedor =>
+    new ProveedorCredenciales(
+        cadenaOperador,
+        proveedor.GetRequiredService<IProtectorDeSecretos>()));
 builder.Services.AddSingleton(FabricaAlmacen.Crear(opcionesAlmacen));
 
 builder.Services.AddSingleton(new OpcionesWorker

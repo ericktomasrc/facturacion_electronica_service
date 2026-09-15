@@ -50,6 +50,12 @@ builder.Services.AddSingleton(new RepositorioConsultas(cadenaOperador));
 builder.Services.AddSingleton<IProtectorDeSecretos>(_ => ProtectorAesGcm.DesdeEntorno());
 builder.Services.AddSingleton<AlmacenCertificados>();
 
+// El panel necesita comprobar si una empresa está lista para producción.
+builder.Services.AddSingleton(proveedor =>
+    new ProveedorCredenciales(
+        cadenaOperador,
+        proveedor.GetRequiredService<IProtectorDeSecretos>()));
+
 // Con ámbito de petición: cada llamada tiene su propio emisor.
 builder.Services.AddScoped<ContextoEmisor>();
 

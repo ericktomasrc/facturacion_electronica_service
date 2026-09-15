@@ -17,7 +17,12 @@ public record TenantAdmin(
     bool TieneCertificado,
     DateTime? CertificadoVence,
     int Series,
-    int Claves);
+    int Claves,
+    string? UsuarioSol,
+    bool TieneClaveSol)
+{
+    public bool EsProduccion => Ambiente == "produccion";
+}
 
 /// <summary>Datos para dar de alta una empresa.</summary>
 public class NuevoTenant
@@ -128,7 +133,11 @@ public sealed class RepositorioAdmin
                          WHERE s.tenant_id = t.id AND s.activo)  AS "Series",
 
                        (SELECT count(*)::int FROM api_keys k
-                         WHERE k.tenant_id = t.id AND k.activo)  AS "Claves"
+                         WHERE k.tenant_id = t.id AND k.activo)  AS "Claves",
+
+                       t.usuario_sol      AS "UsuarioSol",
+                       (t.clave_sol_cifrada IS NOT NULL) AS "TieneClaveSol"
+
                   FROM tenants t
                  -- Alfabético por razón social. Con cincuenta empresas, el
                  -- orden por fecha de alta obliga a recorrer toda la lista
@@ -174,6 +183,64 @@ public sealed class RepositorioAdmin
              WHERE id = @id
             """,
             new { id, activo, maxConcurrencia }, cancellationToken: ct));
+
+        return filas > 0;
+    }
+
+    /// <summary>
+    /// Guarda las credenciales SOL de una empresa. La clave se cifra igual
+    /// que los certificados.
+    ///
+    /// DEBE SER EL USUARIO SOL SECUNDARIO del contribuyente, nunca el
+    /// principal. El principal puede hacer todo en el portal de SUNAT:
+    /// declarar, pagar, modificar datos. Ese nivel de acceso no tiene por
+    /// qué vivir en la base de datos de un proveedor.
+    /// </summary>
+    public async Task<bool> GuardarCredencialesSolAsync(
+        Guid tenantId, string usuario, string clave,
+        IProtectorDeSecretos protector, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(usuario))
+            throw new ArgumentException("Falta el usuario SOL.", nameof(usuario));
+
+        if (string.IsNullOrWhiteSpace(clave))
+            throw new ArgumentException("Falta la clave SOL.", nameof(clave));
+
+        var cifrada = protector.ProtegerTexto(clave);
+
+        await using var conexion = await AbrirAsync(ct);
+
+        var filas = await conexion.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE tenants
+               SET usuario_sol = @usuario,
+                   clave_sol_cifrada = @cifrada
+             WHERE id = @tenantId
+            """,
+            new { tenantId, usuario, cifrada }, cancellationToken: ct));
+
+        return filas > 0;
+    }
+
+    /// <summary>
+    /// Cambia el ambiente de una empresa entre beta y producción.
+    ///
+    /// Quien llame debe haber comprobado antes que está lista: pasar a
+    /// producción sin certificado válido o sin clave SOL hace que todas sus
+    /// facturas fallen desde el primer minuto.
+    /// </summary>
+    public async Task<bool> CambiarAmbienteAsync(
+        Guid tenantId, string ambiente, CancellationToken ct = default)
+    {
+        if (ambiente is not ("beta" or "produccion"))
+            throw new ArgumentException(
+                "El ambiente solo puede ser 'beta' o 'produccion'.", nameof(ambiente));
+
+        await using var conexion = await AbrirAsync(ct);
+
+        var filas = await conexion.ExecuteAsync(new CommandDefinition(
+            "UPDATE tenants SET ambiente = @ambiente WHERE id = @tenantId",
+            new { tenantId, ambiente }, cancellationToken: ct));
 
         return filas > 0;
     }

@@ -37,6 +37,7 @@ public sealed class ProcesadorResumenes
     private readonly RepositorioResumenes _resumenes;
     private readonly ColaTrabajos _cola;
     private readonly AlmacenCertificados _certificados;
+    private readonly ProveedorCredenciales _credenciales;
     private readonly IAlmacenArchivos _archivos;
     private readonly ILogger<ProcesadorResumenes> _log;
 
@@ -44,12 +45,14 @@ public sealed class ProcesadorResumenes
         RepositorioResumenes resumenes,
         ColaTrabajos cola,
         AlmacenCertificados certificados,
+        ProveedorCredenciales credenciales,
         IAlmacenArchivos archivos,
         ILogger<ProcesadorResumenes> log)
     {
         _resumenes = resumenes;
         _cola = cola;
         _certificados = certificados;
+        _credenciales = credenciales;
         _archivos = archivos;
         _log = log;
     }
@@ -154,7 +157,9 @@ public sealed class ProcesadorResumenes
 
         var zip = EmpaquetadorZip.Comprimir(documento.NombreArchivo, bytes);
 
-        using var enviador = new EnviadorSunatSoap(ResolverConfiguracion(tenant));
+        var configuracion = await _credenciales.ObtenerAsync(resumen.TenantId, ct);
+
+        using var enviador = new EnviadorSunatSoap(configuracion);
 
         var envio = await enviador.EnviarResumenAsync(
             $"{documento.NombreArchivo}.zip", zip, ct);
@@ -204,7 +209,9 @@ public sealed class ProcesadorResumenes
         var tenant = await _cola.ObtenerTenantAsync(resumen.TenantId, ct)
             ?? throw new InvalidOperationException("El emisor ya no existe.");
 
-        using var enviador = new EnviadorSunatSoap(ResolverConfiguracion(tenant));
+        var configuracion = await _credenciales.ObtenerAsync(resumen.TenantId, ct);
+
+        using var enviador = new EnviadorSunatSoap(configuracion);
 
         var resultado = await enviador.ConsultarTicketAsync(resumen.Ticket!, ct);
 
@@ -288,16 +295,6 @@ public sealed class ProcesadorResumenes
         Provincia = t.Provincia,
         Departamento = t.Departamento
     };
-
-    private static ConfiguracionSunat ResolverConfiguracion(TenantResuelto tenant)
-    {
-        if (!tenant.EsProduccion)
-            return ConfiguracionSunat.Beta(tenant.Ruc);
-
-        throw new NotImplementedException(
-            "El envío a producción requiere descifrar las credenciales SOL " +
-            "del emisor. Falta implementarlo.");
-    }
 
     private static byte[] SerializarSinBom(System.Xml.XmlDocument doc)
     {
