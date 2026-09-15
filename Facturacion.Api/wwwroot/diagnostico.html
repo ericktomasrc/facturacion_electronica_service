@@ -6,136 +6,117 @@
 <title>Estado del servicio de facturación</title>
 <style>
   :root {
-    --fondo: #0f1115;
-    --panel: #171a21;
-    --borde: #262b36;
-    --texto: #e6e8ec;
-    --tenue: #8b93a3;
-    --sano: #3fb950;
-    --atencion: #d29922;
-    --problema: #f85149;
+    --fondo:#f6f7f9; --panel:#ffffff; --sutil:#f1f3f5; --borde:#e3e6ea;
+    --texto:#1b1f24; --tenue:#5c6570;
+    --sano:#15803d; --atencion:#a16207; --problema:#b91c1c;
+    --acento:#2563eb;
   }
 
-  * { box-sizing: border-box; }
-
-  body {
-    margin: 0;
-    padding: 24px;
-    background: var(--fondo);
-    color: var(--texto);
-    font: 15px/1.55 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo:#0f1115; --panel:#171a21; --sutil:#1c212b; --borde:#262b36;
+      --texto:#e6e8ec; --tenue:#98a1ae;
+      --sano:#3fb950; --atencion:#d29922; --problema:#f85149;
+      --acento:#4493f8;
+    }
   }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px; background:var(--fondo); color:var(--texto);
+         font:15px/1.55 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
+  .contenedor { max-width:1000px; margin:0 auto; }
 
-  .contenedor { max-width: 1000px; margin: 0 auto; }
+  header { display:flex; align-items:center; justify-content:space-between;
+           gap:16px; margin-bottom:8px; flex-wrap:wrap; }
+  h1 { font-size:19px; margin:0; font-weight:500; }
 
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-  }
+  nav { display:flex; gap:18px; border-bottom:1px solid var(--borde);
+        margin-bottom:16px; }
+  nav a { color:var(--tenue); text-decoration:none; font-size:14px;
+          padding:0 2px 9px; border-bottom:2px solid transparent;
+          margin-bottom:-1px; }
+  nav a:hover { color:var(--texto); }
+  nav a.activo { color:var(--texto); border-bottom-color:var(--acento); }
 
-  h1 { font-size: 19px; margin: 0; font-weight: 600; }
+  .controles { display:flex; gap:8px; align-items:center; }
+  input, button { background:var(--panel); border:1px solid var(--borde);
+    color:var(--texto); padding:7px 11px; border-radius:7px; font:inherit;
+    font-size:14px; }
+  button { cursor:pointer; }
+  button:hover:not(:disabled) { border-color:#3a4152; }
+  button:disabled { opacity:.5; cursor:default; }
+  button.principal { background:var(--acento); border-color:var(--acento);
+                     color:#fff; font-weight:500; }
+  button.mini { padding:4px 9px; font-size:13px; }
 
-  .controles { display: flex; gap: 8px; align-items: center; }
+  .semaforo { display:flex; align-items:center; gap:12px; padding:16px 18px;
+    border-radius:10px; border:1px solid var(--borde); background:var(--panel);
+    margin-bottom:18px; }
+  .punto { width:13px; height:13px; border-radius:50%; flex:none; }
+  .Sano .punto { background:var(--sano); }
+  .Atencion .punto { background:var(--atencion); }
+  .Problema .punto { background:var(--problema); }
+  .Sano .etiqueta { color:var(--sano); }
+  .Atencion .etiqueta { color:var(--atencion); }
+  .Problema .etiqueta { color:var(--problema); }
+  .etiqueta { font-weight:500; letter-spacing:.02em; }
+  .alertas { margin:0; padding-left:20px; }
+  .alertas li { margin:5px 0; }
 
-  input, button {
-    background: var(--panel);
-    border: 1px solid var(--borde);
-    color: var(--texto);
-    padding: 7px 11px;
-    border-radius: 7px;
-    font: inherit;
-    font-size: 14px;
-  }
+  .tarjetas { display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:12px; margin-bottom:18px; }
+  .tarjeta { background:var(--sutil); border-radius:10px; padding:14px 16px; }
+  .tarjeta .valor { font-size:26px; font-weight:500; }
+  .tarjeta .nombre { color:var(--tenue); font-size:13px; margin-top:2px; }
 
-  button { cursor: pointer; }
-  button:hover { border-color: #3a4152; }
+  section { background:var(--panel); border:1px solid var(--borde);
+            border-radius:10px; padding:16px 18px; margin-bottom:14px; }
+  h2 { font-size:14px; margin:0 0 12px; color:var(--tenue);
+       text-transform:uppercase; letter-spacing:.06em; font-weight:500; }
 
-  .semaforo {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 16px 18px;
-    border-radius: 10px;
-    border: 1px solid var(--borde);
-    background: var(--panel);
-    margin-bottom: 18px;
-  }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th { text-align:left; color:var(--tenue); font-weight:500; padding:6px 8px;
+       border-bottom:1px solid var(--borde); }
+  td { padding:8px; border-bottom:1px solid #1d222c; vertical-align:top; }
+  tr:last-child td { border-bottom:none; }
 
-  .punto { width: 13px; height: 13px; border-radius: 50%; flex: none; }
-  .Sano     .punto { background: var(--sano); }
-  .Atencion .punto { background: var(--atencion); }
-  .Problema .punto { background: var(--problema); }
+  .mono { font-family:ui-monospace, Consolas, monospace; font-size:13px; }
+  .recorte { max-width:400px; overflow:hidden; text-overflow:ellipsis;
+             white-space:nowrap; }
+  .vacio { color:var(--tenue); font-style:italic; }
+  .mal { color:var(--problema); }
+  footer { color:var(--tenue); font-size:13px; margin-top:18px; }
 
-  .Sano     .etiqueta { color: var(--sano); }
-  .Atencion .etiqueta { color: var(--atencion); }
-  .Problema .etiqueta { color: var(--problema); }
-
-  .etiqueta { font-weight: 600; letter-spacing: .02em; }
-
-  .alertas { margin: 0; padding-left: 20px; }
-  .alertas li { margin: 5px 0; }
-
-  .tarjetas {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 12px;
-    margin-bottom: 18px;
-  }
-
-  .tarjeta {
-    background: var(--panel);
-    border: 1px solid var(--borde);
-    border-radius: 10px;
-    padding: 14px 16px;
-  }
-
-  .tarjeta .valor { font-size: 26px; font-weight: 600; }
-  .tarjeta .nombre { color: var(--tenue); font-size: 13px; margin-top: 2px; }
-
-  section {
-    background: var(--panel);
-    border: 1px solid var(--borde);
-    border-radius: 10px;
-    padding: 16px 18px;
-    margin-bottom: 14px;
-  }
-
-  h2 { font-size: 14px; margin: 0 0 12px; color: var(--tenue);
-       text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
-
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th { text-align: left; color: var(--tenue); font-weight: 500;
-       padding: 6px 8px; border-bottom: 1px solid var(--borde); }
-  td { padding: 8px; border-bottom: 1px solid #1d222c; vertical-align: top; }
-  tr:last-child td { border-bottom: none; }
-
-  .mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-          font-size: 13px; }
-
-  .recorte { max-width: 420px; overflow: hidden;
-             text-overflow: ellipsis; white-space: nowrap; }
-
-  .vacio { color: var(--tenue); font-style: italic; }
-
-  .aviso { color: var(--problema); }
-
-  footer { color: var(--tenue); font-size: 13px; margin-top: 18px; }
+  #avisos { position:fixed; top:20px; right:20px; z-index:100;
+            display:flex; flex-direction:column; gap:8px; max-width:380px; }
+  .aviso-flotante { background:var(--panel); border:1px solid var(--borde);
+    border-left:3px solid var(--acento); border-radius:8px; padding:11px 14px;
+    font-size:14px; box-shadow:0 6px 20px rgba(0,0,0,.4);
+    animation:entrar .18s ease-out; }
+  .aviso-flotante.ok  { border-left-color:var(--sano); }
+  .aviso-flotante.mal { border-left-color:var(--problema); }
+  .aviso-flotante .titulo { font-weight:500; margin-bottom:2px; }
+  .aviso-flotante .detalle { color:var(--tenue); font-size:13px; }
+  @keyframes entrar { from { opacity:0; transform:translateX(16px); } }
 </style>
 </head>
 <body>
-<div class="contenedor">
 
+<div id="avisos"></div>
+
+<div class="contenedor">
   <header>
-    <h1>Estado del servicio de facturación</h1>
+    <h1>Facturación electrónica</h1>
     <div class="controles">
       <input id="clave" type="password" placeholder="Clave de operador" size="22">
-      <button id="actualizar">Actualizar</button>
+      <button id="actualizar" class="principal">Actualizar</button>
     </div>
   </header>
+
+  <nav>
+    <a href="/diagnostico.html" class="activo">Estado del servicio</a>
+    <a href="/admin.html">Empresas</a>
+  </nav>
 
   <div id="contenido">
     <section class="vacio">Introduce la clave de operador y pulsa Actualizar.</section>
@@ -145,45 +126,64 @@
 </div>
 
 <script>
-// Panel de una sola página, sin dependencias externas.
-// La clave se guarda solo en esta pestaña: al cerrarla, desaparece.
+// NO SE USA "$" COMO NOMBRE DE FUNCIÓN: Browser Link, la herramienta de
+// Visual Studio que recarga la página al guardar, inyecta jQuery y espera
+// encontrarlo ahí. Definir otra cosa rompe su script con un error que
+// parece del panel y no lo es.
+const elem = id => document.getElementById(id);
 
-const $ = id => document.getElementById(id);
+const claveInput = elem("clave");
+claveInput.value = sessionStorage.getItem("claveOperador") || "";
 
-const clave = $("clave");
-clave.value = sessionStorage.getItem("claveOperador") || "";
+elem("actualizar").onclick = cargar;
+claveInput.onkeydown = e => { if (e.key === "Enter") cargar(); };
 
-$("actualizar").onclick = cargar;
-clave.onkeydown = e => { if (e.key === "Enter") cargar(); };
+function avisar(titulo, detalle = "", tipo = "") {
+  const caja = document.createElement("div");
+  caja.className = "aviso-flotante " + tipo;
+
+  caja.innerHTML =
+    `<div class="titulo">${escapar(titulo)}</div>` +
+    (detalle ? `<div class="detalle">${escapar(detalle)}</div>` : "");
+
+  elem("avisos").appendChild(caja);
+
+  setTimeout(() => caja.remove(), tipo === "mal" ? 8000 : 4000);
+}
 
 async function cargar() {
-  sessionStorage.setItem("claveOperador", clave.value);
+  sessionStorage.setItem("claveOperador", claveInput.value);
+
+  const boton = elem("actualizar");
+  boton.disabled = true;
 
   try {
     const respuesta = await fetch("/admin/salud", {
-      headers: { "X-Admin-Key": clave.value }
+      headers: { "X-Admin-Key": claveInput.value }
     });
 
     if (respuesta.status === 401) {
-      $("contenido").innerHTML =
-        `<section class="aviso">Clave de operador no válida.</section>`;
+      elem("contenido").innerHTML =
+        `<section class="mal">Clave de operador no válida.</section>`;
       return;
     }
 
     if (!respuesta.ok) {
-      $("contenido").innerHTML =
-        `<section class="aviso">El servicio respondió ${respuesta.status}.</section>`;
+      elem("contenido").innerHTML =
+        `<section class="mal">El servicio respondió ${respuesta.status}.</section>`;
       return;
     }
 
     pintar(await respuesta.json());
 
-    $("pie").textContent =
+    elem("pie").textContent =
       "Última consulta: " + new Date().toLocaleTimeString("es-PE");
 
   } catch (error) {
-    $("contenido").innerHTML =
-      `<section class="aviso">No se pudo contactar el servicio: ${error.message}</section>`;
+    elem("contenido").innerHTML =
+      `<section class="mal">No se pudo contactar el servicio: ${escapar(error.message)}</section>`;
+  } finally {
+    boton.disabled = false;
   }
 }
 
@@ -215,9 +215,9 @@ function pintar(d) {
         <tr><th>Empresa</th><th>Vence</th><th>Días</th></tr>
         ${d.certificados.map(c => `
           <tr>
-            <td>${escapar(c.razonSocial)} <span class="mono">${c.ruc}</span></td>
+            <td>${escapar(c.razonSocial)} <span class="mono">${escapar(c.ruc)}</span></td>
             <td class="mono">${c.validoHasta.slice(0, 10)}</td>
-            <td class="${c.diasRestantes <= 30 ? "aviso" : ""}">${c.diasRestantes}</td>
+            <td class="${c.diasRestantes <= 30 ? "mal" : ""}">${c.diasRestantes}</td>
           </tr>`).join("")}
       </table>`));
   }
@@ -245,25 +245,41 @@ function pintar(d) {
             <td>${escapar(c.estado)}</td>
             <td>${c.intentosFallidos}</td>
             <td class="recorte" title="${escapar(c.ultimoMensaje ?? "")}">${escapar(c.ultimoMensaje ?? "—")}</td>
-            <td><button onclick="reprocesar('${c.id}')">Reprocesar</button></td>
+            <td><button class="mini" data-reprocesar="${c.id}">Reprocesar</button></td>
           </tr>`).join("")}
       </table>`));
   }
 
-  $("contenido").innerHTML = partes.join("");
+  elem("contenido").innerHTML = partes.join("");
+
+  document.querySelectorAll("button[data-reprocesar]").forEach(boton =>
+    boton.onclick = () => reprocesar(boton.dataset.reprocesar, boton));
 }
 
-async function reprocesar(id) {
-  const respuesta = await fetch(`/admin/comprobantes/${id}/reprocesar`, {
-    method: "POST",
-    headers: { "X-Admin-Key": clave.value }
-  });
+async function reprocesar(id, boton) {
+  boton.disabled = true;
 
-  const cuerpo = await respuesta.json();
+  try {
+    const respuesta = await fetch(`/admin/comprobantes/${id}/reprocesar`, {
+      method: "POST",
+      headers: { "X-Admin-Key": claveInput.value }
+    });
 
-  alert(respuesta.ok ? cuerpo.mensaje : (cuerpo.detalle || cuerpo.error));
+    const cuerpo = await respuesta.json().catch(() => ({}));
 
-  cargar();
+    if (respuesta.ok) {
+      avisar("Devuelto a la cola",
+             "El worker lo tomará en el siguiente ciclo.", "ok");
+    } else {
+      avisar(cuerpo.error || "No se pudo reprocesar", cuerpo.detalle, "mal");
+    }
+
+    await cargar();
+
+  } catch (e) {
+    avisar("Error al reprocesar", e.message, "mal");
+    boton.disabled = false;
+  }
 }
 
 const tarjeta = (valor, nombre) =>
@@ -278,10 +294,10 @@ const textoNivel = nivel => ({
   Problema: "Hay un problema"
 }[nivel] || nivel);
 
-const escapar = texto => String(texto ?? "").replace(/[&<>"']/g,
-  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const escapar = t => String(t ?? "").replace(/[&<>"']/g,
+  c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
-if (clave.value) cargar();
+if (claveInput.value) cargar();
 </script>
 </body>
 </html>

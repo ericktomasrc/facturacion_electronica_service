@@ -176,19 +176,88 @@ public sealed class AlmacenCertificados
         return filas.ToList();
     }
 
+    /// <summary>
+    /// Abre el PFX.
+    ///
+    /// POR QUÉ SE PRUEBAN VARIAS FORMAS DE CARGARLO:
+    ///
+    /// En Windows, abrir un PFX puede exigir escribir la llave privada en un
+    /// almacén del sistema, y el proceso no siempre tiene permiso para el
+    /// almacén de máquina. Cuando eso ocurre, .NET lanza exactamente la misma
+    /// excepción que cuando la contraseña es incorrecta.
+    ///
+    /// Una versión anterior de este método daba por hecho que era la
+    /// contraseña. El mensaje sonaba útil y mandaba a buscar en la dirección
+    /// equivocada: la contraseña estaba bien y el problema eran los permisos.
+    ///
+    /// Ahora se intentan varias combinaciones y, si todas fallan, se incluye
+    /// el mensaje REAL del sistema en vez de una conjetura.
+    /// </summary>
     private static X509Certificate2 AbrirPfx(byte[] contenido, string clave)
     {
-        try
-        {
-            return new X509Certificate2(
-                contenido, clave,
-                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.MachineKeySet);
-        }
-        catch (Exception ex)
-        {
+        // Un PFX es una estructura DER y siempre empieza con 0x30 0x82.
+        // Comprobarlo permite afirmar con certeza que el archivo no es un
+        // certificado, en vez de culpar a la contraseña.
+        if (contenido.Length < 2 || contenido[0] != 0x30 || contenido[1] != 0x82)
             throw new InvalidOperationException(
-                "No se pudo abrir el certificado. Revisa que el archivo sea un " +
-                "PFX válido y que la contraseña sea la correcta.", ex);
+                "El archivo no parece un certificado PFX. Comprueba que sea el " +
+                "archivo .pfx o .p12 que entregó la entidad certificadora, y no " +
+                "un .cer, un .pem o un comprimido.");
+
+        // En orden de preferencia:
+        //
+        //   Ephemeral  la llave vive solo en memoria y no toca ningún almacén.
+        //              Es lo que queremos: el certificado ya se guarda cifrado
+        //              en la base, no hace falta dejar rastro en el sistema.
+        //
+        //   UserKeySet almacén del usuario que ejecuta el proceso. Casi
+        //              siempre disponible.
+        //
+        //   MachineKeySet  almacén de máquina. Puede requerir permisos
+        //              elevados, y ahí es donde suele fallar.
+        var intentos = new[]
+        {
+            X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet,
+            X509KeyStorageFlags.Exportable | X509KeyStorageFlags.UserKeySet,
+            X509KeyStorageFlags.Exportable | X509KeyStorageFlags.MachineKeySet,
+            X509KeyStorageFlags.Exportable
+        };
+
+        Exception? ultimoError = null;
+
+        foreach (var opciones in intentos)
+        {
+            try
+            {
+                var certificado = new X509Certificate2(contenido, clave, opciones);
+
+                // EphemeralKeySet a veces devuelve un certificado cuya llave
+                // privada no sirve para firmar. Se comprueba antes de darlo
+                // por bueno: descubrirlo aquí es barato, descubrirlo al firmar
+                // una factura real no lo es.
+                if (certificado.HasPrivateKey && certificado.GetRSAPrivateKey() is not null)
+                    return certificado;
+
+                certificado.Dispose();
+
+                ultimoError ??= new InvalidOperationException(
+                    "El certificado se abrió pero su llave privada no es " +
+                    "utilizable para firmar.");
+            }
+            catch (Exception ex)
+            {
+                ultimoError = ex;
+            }
         }
+
+        // Ninguna forma funcionó. Se entrega el mensaje real del sistema,
+        // sin interpretarlo: adivinar la causa es lo que nos hizo perder
+        // tiempo la vez anterior.
+        throw new InvalidOperationException(
+            "No se pudo abrir el certificado. El sistema respondió: " +
+            (ultimoError?.Message ?? "sin detalle") +
+            ". Si la contraseña es correcta, revisa los permisos del proceso " +
+            "sobre el almacén de certificados de Windows.",
+            ultimoError);
     }
 }

@@ -39,6 +39,15 @@ var carpetaAlmacen = builder.Configuration["Almacen:Carpeta"] ?? "../almacen";
 builder.Services.AddSingleton<IAlmacenArchivos>(
     _ => new AlmacenArchivosDisco(carpetaAlmacen));
 
+// Administración de empresas, series y claves.
+builder.Services.AddSingleton(new RepositorioAdmin(cadenaOperador));
+
+// La API necesita la llave maestra porque cifra los certificados al cargarlos.
+// Si falta la variable de entorno, el proceso no arranca: es preferible a
+// descubrirlo cuando alguien intente subir un certificado.
+builder.Services.AddSingleton<IProtectorDeSecretos>(_ => ProtectorAesGcm.DesdeEntorno());
+builder.Services.AddSingleton<AlmacenCertificados>();
+
 // Con ámbito de petición: cada llamada tiene su propio emisor.
 builder.Services.AddScoped<ContextoEmisor>();
 
@@ -131,6 +140,7 @@ app.UseMiddleware<AutenticacionApiKey>();
 // --- Endpoints -------------------------------------------------------------
 
 app.MapearDiagnostico();
+app.MapearAdministracion();
 app.MapearDescargas();
 
 app.MapGet("/health", () => Results.Ok(new { estado = "vivo" }))
