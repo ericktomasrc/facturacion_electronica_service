@@ -97,3 +97,23 @@ public record CambioEstado(
     int? DuracionMs = null,
     string? Worker = null,
     string? Ticket = null);
+
+/// <summary>
+/// Dónde están los archivos de un comprobante.
+///
+/// Las rutas son RELATIVAS al almacén, no absolutas. Guardar rutas absolutas
+/// ataría los datos a la máquina que los escribió: al mudar de servidor, o
+/// al pasar de disco a S3, todas dejarían de servir.
+/// </summary>
+public record ArchivosComprobante(
+    string Numero,
+    string TipoComprobante,
+    string Estado,
+    string? RutaXml,
+    string? RutaCdr,
+    string? RutaPdf)
+{
+    /// <summary>Nombre con el que se ofrece la descarga al usuario.</summary>
+    public string NombreDescarga(string extension) =>
+        $"{Numero}.{extension}";
+}

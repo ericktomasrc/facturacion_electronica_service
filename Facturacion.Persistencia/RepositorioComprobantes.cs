@@ -328,6 +328,38 @@ public sealed class RepositorioComprobantes
     }
 
     /// <summary>
+    /// Rutas de los archivos de un comprobante.
+    ///
+    /// Va por sesión de tenant, así que Row Level Security garantiza que
+    /// nadie pueda pedir las rutas de otra empresa. Eso importa más de lo
+    /// que parece: si este método no filtrara por tenant, bastaría adivinar
+    /// un identificador para descargar la factura de un competidor.
+    /// </summary>
+    public async Task<ArchivosComprobante?> ObtenerRutasAsync(
+        Guid tenantId, Guid comprobanteId, CancellationToken ct = default)
+    {
+        await using var sesion = await _sesiones.AbrirAsync(tenantId, ct);
+
+        var fila = await sesion.Conexion.QuerySingleOrDefaultAsync<ArchivosComprobante?>(
+            new CommandDefinition(
+                """
+                SELECT serie || '-' || lpad(correlativo::text, 8, '0') AS "Numero",
+                       tipo_comprobante AS "TipoComprobante",
+                       estado           AS "Estado",
+                       ruta_xml         AS "RutaXml",
+                       ruta_cdr         AS "RutaCdr",
+                       ruta_pdf         AS "RutaPdf"
+                  FROM comprobantes
+                 WHERE id = @comprobanteId
+                """,
+                new { comprobanteId },
+                sesion.Transaccion, cancellationToken: ct));
+
+        await sesion.ConfirmarAsync(ct);
+        return fila;
+    }
+
+    /// <summary>
     /// Da de alta una serie si no existe. Pensado para el arranque y las
     /// pruebas; en producción esto lo hace el panel de administración.
     /// </summary>

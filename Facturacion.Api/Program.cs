@@ -25,6 +25,20 @@ builder.Services.AddSingleton(new RepositorioDiagnostico(cadenaOperador));
 builder.Services.AddSingleton<RepositorioTenants>();
 builder.Services.AddSingleton<RepositorioComprobantes>();
 
+// ALMACÉN COMPARTIDO CON EL WORKER.
+//
+// La API y el worker son procesos distintos, pero tienen que leer y escribir
+// en la MISMA carpeta. Si cada uno apunta a la suya, el worker genera los
+// archivos y la API responde que no existen, con un error desconcertante.
+//
+// En desarrollo se resuelve con una ruta relativa que ambos resuelven al
+// mismo sitio. En producción esto será un volumen montado o S3, y entonces
+// el problema desaparece solo.
+var carpetaAlmacen = builder.Configuration["Almacen:Carpeta"] ?? "../almacen";
+
+builder.Services.AddSingleton<IAlmacenArchivos>(
+    _ => new AlmacenArchivosDisco(carpetaAlmacen));
+
 // Con ámbito de petición: cada llamada tiene su propio emisor.
 builder.Services.AddScoped<ContextoEmisor>();
 
@@ -117,6 +131,7 @@ app.UseMiddleware<AutenticacionApiKey>();
 // --- Endpoints -------------------------------------------------------------
 
 app.MapearDiagnostico();
+app.MapearDescargas();
 
 app.MapGet("/health", () => Results.Ok(new { estado = "vivo" }))
    .WithName("Salud")
