@@ -27,21 +27,22 @@ builder.Services.AddSingleton<RepositorioComprobantes>();
 
 // ALMACÉN COMPARTIDO CON EL WORKER.
 //
-// La API y el worker son procesos distintos, pero tienen que leer y escribir
-// en la MISMA carpeta. Si cada uno apunta a la suya, el worker genera los
-// archivos y la API responde que no existen, con un error desconcertante.
+// Los dos procesos leen y escriben en el mismo sitio. Con carpetas locales
+// eso era frágil: bastaba que cada uno apuntara a una ruta distinta para que
+// el worker generara archivos y la API respondiera que no existen.
 //
-// En desarrollo se resuelve con una ruta relativa que ambos resuelven al
-// mismo sitio. En producción esto será un volumen montado o S3, y entonces
-// el problema desaparece solo.
-var carpetaAlmacen = builder.Configuration["Almacen:Carpeta"] ?? "../almacen";
+// Con S3 el problema desaparece: ambos apuntan al mismo servidor, y da igual
+// desde qué máquina corran.
+var opcionesAlmacen = new OpcionesAlmacen();
+builder.Configuration.GetSection("Almacen").Bind(opcionesAlmacen);
 
-builder.Services.AddSingleton<IAlmacenArchivos>(
-    _ => new AlmacenArchivosDisco(carpetaAlmacen));
+builder.Services.AddSingleton(opcionesAlmacen);
+builder.Services.AddSingleton(FabricaAlmacen.Crear(opcionesAlmacen));
 
 // Administración de empresas, series y claves.
 builder.Services.AddSingleton(new RepositorioAdmin(cadenaOperador));
 builder.Services.AddSingleton(new RepositorioWebhooks(cadenaOperador));
+builder.Services.AddSingleton(new RepositorioConsultas(cadenaOperador));
 
 // La API necesita la llave maestra porque cifra los certificados al cargarlos.
 // Si falta la variable de entorno, el proceso no arranca: es preferible a
@@ -152,6 +153,16 @@ builder.Services.AddSwaggerGen(opciones =>
 
 var app = builder.Build();
 
+// Comprobar el almacén AL ARRANCAR, no al primer uso.
+//
+// Descubrir que la configuración está mal cuando un cliente emite su primera
+// factura es mucho peor que descubrirlo al encender el servicio.
+if (app.Services.GetRequiredService<IAlmacenArchivos>() is AlmacenArchivosS3 almacenS3)
+{
+    var mensaje = await almacenS3.ComprobarAsync();
+    app.Logger.LogInformation("{Mensaje}", mensaje);
+}
+
 // --- Middleware ------------------------------------------------------------
 
 if (app.Environment.IsDevelopment())
@@ -180,6 +191,7 @@ app.UseMiddleware<AutenticacionApiKey>();
 app.MapearDiagnostico();
 app.MapearAdministracion();
 app.MapearWebhooks();
+app.MapearConsultas();
 app.MapearNotas();
 app.MapearDescargas();
 

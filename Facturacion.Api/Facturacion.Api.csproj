@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Facturacion.Persistencia\Facturacion.Persistencia.csproj" />
+    <ProjectReference Include="..\Facturacion.Pdf\Facturacion.Pdf.csproj" />
   </ItemGroup>
 
   <ItemGroup>

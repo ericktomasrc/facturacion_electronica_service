@@ -6,27 +6,21 @@ services:
     restart: unless-stopped
 
     environment:
-      # Este es el usuario DUEÑO del esquema, el que corre las migraciones.
-      # La aplicación NO usa este usuario: se conecta con uno restringido,
-      # creado en la migración, que sí está sujeto a Row Level Security.
+      # Usuario DUEÑO del esquema, el que corre las migraciones.
+      # La aplicación NO usa este usuario: se conecta con uno restringido
+      # que sí está sujeto a Row Level Security.
       POSTGRES_USER: facturacion_owner
       POSTGRES_PASSWORD: cambiame_en_produccion
       POSTGRES_DB: facturacion
-
-      # Configuración regional. El servidor guarda todo en UTC y la aplicación
-      # convierte al mostrar: mezclar zonas horarias en la base es una fuente
-      # de errores difíciles de rastrear.
       TZ: UTC
       PGTZ: UTC
 
     ports:
+      # El 5433 porque el 5432 puede estar ocupado por otro proyecto.
       - "5433:5432"
 
     volumes:
       - datos_postgres:/var/lib/postgresql/data
-      # Los archivos de esta carpeta se ejecutan en orden alfabético la
-      # PRIMERA vez que arranca el contenedor, cuando el volumen está vacío.
-      # Si cambias una migración después, hay que borrar el volumen.
       - ./migraciones:/docker-entrypoint-initdb.d:ro
 
     healthcheck:
@@ -34,6 +28,79 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+
+  # ===========================================================================
+  # MINIO — ALMACÉN DE ARCHIVOS
+  #
+  # QUÉ ES: un servidor de almacenamiento que habla el protocolo S3, el mismo
+  # que usan Amazon, Cloudflare R2 y Google. Corre donde tú lo pongas: aquí en
+  # tu máquina, mañana en tu servidor.
+  #
+  # POR QUÉ ESTE Y NO UNA NUBE DIRECTAMENTE: el mismo contenedor sirve para
+  # desarrollo y para producción, así que no hay dos configuraciones que
+  # mantener ni sorpresas al desplegar. Y si algún día prefieres no
+  # administrarlo, apuntas la configuración a una nube y el código no se entera.
+  #
+  # POR QUÉ NO GUARDARLOS EN POSTGRESQL: son megabytes por comprobante que
+  # nunca se consultan con SQL. Meterlos en la base hincha los backups hasta
+  # que restaurar deja de ser viable, y eso aparece a los seis meses, justo
+  # cuando más falta hace poder restaurar.
+  # ===========================================================================
+
+  minio:
+    # Las imágenes de MinIO se publican en quay.io, no en Docker Hub.
+    # Pedirlas como "minio/minio" da un error de permisos desconcertante
+    # que parece de autenticación y en realidad es de registro equivocado.
+    image: quay.io/minio/minio:latest
+    container_name: facturacion-almacen
+    restart: unless-stopped
+
+    command: server /data --console-address ":9001"
+
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: cambiame_en_produccion
+
+    ports:
+      - "9000:9000"   # API compatible con S3
+      - "9001:9001"   # Consola web para mirar los archivos
+
+    volumes:
+      - datos_minio:/data
+
+    healthcheck:
+      # El propio MinIO expone un punto de salud. Es más fiable que depender
+      # de que la imagen traiga una herramienta concreta.
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+
+  # Crea el bucket al arrancar. Sin esto habría que entrar a la consola
+  # la primera vez, y eso es un paso manual que alguien olvidará.
+  minio-inicial:
+    image: quay.io/minio/mc:latest
+    container_name: facturacion-almacen-inicial
+    depends_on:
+      minio:
+        condition: service_healthy
+
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin cambiame_en_produccion;
+      mc mb --ignore-existing local/comprobantes;
+      mc version enable local/comprobantes;
+      echo 'Bucket listo con versionado activo.';
+      exit 0;
+      "
+
+    # El versionado del bucket es una red de seguridad real: si alguien
+    # sobrescribe o borra un CDR por error, la versión anterior sigue ahí.
+    # Son documentos con obligación legal de conservación.
+
 
   # Interfaz web para inspeccionar la base durante el desarrollo.
   # No la despliegues en producción.
@@ -47,5 +114,7 @@ services:
       postgres:
         condition: service_healthy
 
+
 volumes:
   datos_postgres:
+  datos_minio:

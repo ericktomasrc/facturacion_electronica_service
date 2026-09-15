@@ -23,7 +23,10 @@ var cadenaApp = builder.Configuration.GetConnectionString("Facturacion")
 var cadenaOperador = builder.Configuration.GetConnectionString("FacturacionOperador")
     ?? throw new InvalidOperationException("Falta la cadena 'FacturacionOperador'.");
 
-var carpetaAlmacen = builder.Configuration["Almacen:Carpeta"] ?? "almacen";
+// El almacén se construye desde la configuración: disco en desarrollo,
+// S3 en cuanto se apunte a MinIO o a una nube. El código es el mismo.
+var opcionesAlmacen = new OpcionesAlmacen();
+builder.Configuration.GetSection("Almacen").Bind(opcionesAlmacen);
 
 // --- Servicios -------------------------------------------------------------
 
@@ -32,8 +35,7 @@ builder.Services.AddSingleton(new ColaTrabajos(cadenaOperador));
 builder.Services.AddSingleton<RepositorioComprobantes>();
 builder.Services.AddSingleton<IProtectorDeSecretos>(_ => ProtectorAesGcm.DesdeEntorno());
 builder.Services.AddSingleton<AlmacenCertificados>();
-builder.Services.AddSingleton<IAlmacenArchivos>(
-    _ => new AlmacenArchivosDisco(carpetaAlmacen));
+builder.Services.AddSingleton(FabricaAlmacen.Crear(opcionesAlmacen));
 
 builder.Services.AddSingleton(new OpcionesWorker
 {

@@ -117,3 +117,19 @@ public record ArchivosComprobante(
     public string NombreDescarga(string extension) =>
         $"{Numero}.{extension}";
 }
+
+/// <summary>
+/// Lo necesario para reconstruir el PDF de un comprobante.
+///
+/// El PDF no se guarda en el almacén: se genera cuando alguien lo pide. Es el
+/// archivo más pesado de los tres y el único que se puede rehacer a partir de
+/// lo que ya está en la base.
+/// </summary>
+public record DatosParaPdf(
+    string Numero,
+    string TipoComprobante,
+    string Estado,
+    string? CodigoSunat,
+    string? MensajeSunat,
+    string CpeJson,
+    string? RutaXml);

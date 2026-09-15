@@ -392,6 +392,44 @@ public sealed class RepositorioComprobantes
     }
 
     /// <summary>
+    /// Todo lo necesario para regenerar el PDF de un comprobante.
+    ///
+    /// POR QUÉ EL PDF NO SE GUARDA:
+    ///
+    /// Es el 80% del peso del almacén y el único de los tres archivos que se
+    /// puede reconstruir. El XML y el CDR son irreemplazables; el PDF sale del
+    /// mismo cpe que ya está aquí.
+    ///
+    /// Con cien mil comprobantes diarios, guardarlo son más de dos terabytes
+    /// al año. Generarlo cuando alguien lo pide reduce eso a menos de la
+    /// cuarta parte, y cuesta unas décimas de segundo.
+    /// </summary>
+    public async Task<DatosParaPdf?> ObtenerParaPdfAsync(
+        Guid tenantId, Guid comprobanteId, CancellationToken ct = default)
+    {
+        await using var sesion = await _sesiones.AbrirAsync(tenantId, ct);
+
+        var fila = await sesion.Conexion.QuerySingleOrDefaultAsync<DatosParaPdf?>(
+            new CommandDefinition(
+                """
+                SELECT serie || '-' || lpad(correlativo::text, 8, '0') AS "Numero",
+                       tipo_comprobante AS "TipoComprobante",
+                       estado           AS "Estado",
+                       codigo_sunat     AS "CodigoSunat",
+                       mensaje_sunat    AS "MensajeSunat",
+                       cpe::text        AS "CpeJson",
+                       ruta_xml         AS "RutaXml"
+                  FROM comprobantes
+                 WHERE id = @comprobanteId
+                """,
+                new { comprobanteId },
+                sesion.Transaccion, cancellationToken: ct));
+
+        await sesion.ConfirmarAsync(ct);
+        return fila;
+    }
+
+    /// <summary>
     /// Da de alta una serie si no existe. Pensado para el arranque y las
     /// pruebas; en producción esto lo hace el panel de administración.
     /// </summary>

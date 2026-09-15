@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Comprobantes · Facturación electrónica</title>
+<style>
+  :root {
+    --fondo:#f6f7f9; --panel:#ffffff; --sutil:#f1f3f5;
+    --borde:#e3e6ea; --borde-fuerte:#cfd4da;
+    --texto:#1b1f24; --tenue:#5c6570; --apagado:#8a929c;
+    --acento:#2563eb; --acento-fondo:#eef4ff;
+    --ok:#15803d; --ok-fondo:#eaf6ee;
+    --aviso:#a16207; --aviso-fondo:#fdf5e3;
+    --mal:#b91c1c; --mal-fondo:#fdeded;
+    --radio:8px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo:#0f1115; --panel:#171a21; --sutil:#1c212b;
+      --borde:#262b36; --borde-fuerte:#3a4152;
+      --texto:#e6e8ec; --tenue:#98a1ae; --apagado:#6f7884;
+      --acento:#4493f8; --acento-fondo:#12233c;
+      --ok:#3fb950; --ok-fondo:#122a18;
+      --aviso:#d29922; --aviso-fondo:#2b2311;
+      --mal:#f85149; --mal-fondo:#2d1516;
+    }
+  }
+
+  * { box-sizing:border-box; }
+  body { margin:0; padding:22px; background:var(--fondo); color:var(--texto);
+         font:15px/1.55 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
+  .contenedor { max-width:1280px; margin:0 auto; }
+
+  header { display:flex; align-items:center; justify-content:space-between;
+           gap:16px; margin-bottom:6px; flex-wrap:wrap; }
+  h1 { font-size:19px; margin:0; font-weight:500; }
+
+  nav { display:flex; gap:18px; border-bottom:1px solid var(--borde);
+        margin-bottom:16px; }
+  nav a { color:var(--tenue); text-decoration:none; font-size:14px;
+          padding:0 2px 9px; border-bottom:2px solid transparent;
+          margin-bottom:-1px; }
+  nav a:hover { color:var(--texto); }
+  nav a.activo { color:var(--texto); border-bottom-color:var(--acento); }
+
+  input, select, button { font:inherit; font-size:14px; color:var(--texto);
+    background:var(--panel); border:1px solid var(--borde);
+    border-radius:var(--radio); padding:7px 11px; }
+  input:focus, select:focus { outline:none; border-color:var(--acento); }
+  button { cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--borde-fuerte); }
+  button:disabled { opacity:.5; cursor:default; }
+  button.principal { background:var(--acento); border-color:var(--acento);
+                     color:#fff; font-weight:500; }
+  button.mini { padding:4px 9px; font-size:12.5px; }
+
+  .tarjeta { background:var(--panel); border:1px solid var(--borde);
+             border-radius:12px; padding:16px 18px; margin-bottom:14px; }
+
+  .filtros { display:grid;
+    grid-template-columns:minmax(220px,1.6fr) repeat(auto-fit,minmax(130px,1fr));
+    gap:10px; align-items:end; }
+  label { display:block; font-size:12px; color:var(--tenue); margin-bottom:4px; }
+  label input, label select { width:100%; }
+
+  .buscador { position:relative; }
+  .buscador input { padding-left:32px; }
+  .buscador svg { position:absolute; left:10px; bottom:9px; width:15px;
+                  height:15px; stroke:var(--apagado); fill:none; stroke-width:2; }
+
+  table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  th { text-align:left; color:var(--tenue); font-weight:400; padding:7px 8px;
+       border-bottom:1px solid var(--borde); font-size:12.5px;
+       white-space:nowrap; }
+  td { padding:9px 8px; border-bottom:1px solid var(--borde);
+       vertical-align:middle; }
+  tr:last-child td { border-bottom:none; }
+  tr.fila:hover td { background:var(--sutil); }
+
+  .mono { font-family:ui-monospace, Consolas, monospace; font-size:12.5px; }
+  .tenue { color:var(--tenue); }
+  .num { text-align:right; white-space:nowrap; }
+  .recorte { max-width:190px; overflow:hidden; text-overflow:ellipsis;
+             white-space:nowrap; }
+  .vacio { color:var(--tenue); padding:26px 0; text-align:center; }
+
+  .insignia { font-size:11.5px; padding:2px 8px; border-radius:var(--radio);
+              white-space:nowrap; }
+  .i-ok { background:var(--ok-fondo); color:var(--ok); }
+  .i-aviso { background:var(--aviso-fondo); color:var(--aviso); }
+  .i-mal { background:var(--mal-fondo); color:var(--mal); }
+  .i-tenue { background:var(--sutil); color:var(--tenue); }
+
+  .paginacion { display:flex; align-items:center; justify-content:space-between;
+                gap:12px; margin-top:14px; font-size:13.5px; color:var(--tenue); }
+
+  #avisos { position:fixed; top:18px; right:18px; z-index:60;
+            display:flex; flex-direction:column; gap:8px; max-width:370px; }
+  .flotante { background:var(--panel); border:1px solid var(--borde);
+    border-left:3px solid var(--acento); border-radius:var(--radio);
+    padding:11px 14px; font-size:14px; box-shadow:0 6px 22px rgba(0,0,0,.14); }
+  .flotante.mal { border-left-color:var(--mal); }
+  .flotante .t { font-weight:500; }
+  .flotante .d { color:var(--tenue); font-size:13px; margin-top:2px; }
+
+  .velo { position:fixed; inset:0; background:rgba(15,18,23,.5); z-index:70;
+          display:none; align-items:center; justify-content:center; padding:20px; }
+  .velo.visible { display:flex; }
+  .modal { background:var(--panel); border:1px solid var(--borde);
+           border-radius:14px; padding:22px 24px; width:100%; max-width:720px;
+           max-height:86vh; overflow-y:auto; }
+  .modal h3 { margin:0 0 3px; font-size:17px; font-weight:500; }
+  .modal .sub { color:var(--tenue); font-size:13.5px; margin-bottom:16px; }
+  .modal .cerrar { display:flex; justify-content:flex-end; margin-top:16px; }
+</style>
+</head>
+<body>
+
+<div id="avisos"></div>
+
+<div class="velo" id="velo-detalle">
+  <div class="modal">
+    <h3 id="d-titulo"></h3>
+    <div class="sub" id="d-sub"></div>
+    <div id="d-cuerpo"></div>
+    <div class="cerrar"><button id="d-cerrar">Cerrar</button></div>
+  </div>
+</div>
+
+<div class="contenedor">
+  <header>
+    <h1>Facturación electrónica</h1>
+    <div>
+      <input id="clave" type="password" placeholder="Clave de operador" size="21">
+      <button id="entrar" class="principal">Entrar</button>
+    </div>
+  </header>
+
+  <nav>
+    <a href="/diagnostico.html">Estado del servicio</a>
+    <a href="/admin.html">Empresas</a>
+    <a href="/comprobantes.html" class="activo">Comprobantes</a>
+  </nav>
+
+  <div class="tarjeta">
+    <div class="filtros">
+      <div class="buscador">
+        <label for="f-texto">Buscar</label>
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="f-texto" placeholder="RUC, empresa, número o cliente">
+      </div>
+
+      <label>Tipo
+        <select id="f-tipo">
+          <option value="">Todos</option>
+          <option value="01">Factura</option>
+          <option value="03">Boleta</option>
+          <option value="07">Nota de crédito</option>
+          <option value="08">Nota de débito</option>
+        </select></label>
+
+      <label>Estado
+        <select id="f-estado">
+          <option value="">Todos</option>
+          <option value="ACEPTADO">Aceptado</option>
+          <option value="ACEPTADO_CON_OBSERVACIONES">Con observaciones</option>
+          <option value="RECHAZADO">Rechazado</option>
+          <option value="BORRADOR">Pendiente</option>
+          <option value="ENCOLADO">En proceso</option>
+          <option value="ANULADO">Anulado</option>
+        </select></label>
+
+      <label>Desde<input id="f-desde" type="date"></label>
+      <label>Hasta<input id="f-hasta" type="date"></label>
+
+      <button class="principal" id="btn-buscar">Buscar</button>
+    </div>
+  </div>
+
+  <div class="tarjeta" id="resultados">
+    <div class="vacio">Introduce la clave de operador para buscar.</div>
+  </div>
+</div>
+
+<script>
+// NO SE USA "$" COMO NOMBRE DE FUNCIÓN: Browser Link, la herramienta de
+// Visual Studio que recarga la página al guardar, inyecta jQuery y espera
+// encontrarlo ahí.
+const elem = id => document.getElementById(id);
+const esc = t => String(t ?? "").replace(/[&<>"']/g,
+  c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+const estado = { pagina: 1, ultima: null };
+
+const claveInput = elem("clave");
+claveInput.value = sessionStorage.getItem("claveOperador") || "";
+
+elem("entrar").onclick = () => { estado.pagina = 1; buscar(); };
+elem("btn-buscar").onclick = () => { estado.pagina = 1; buscar(); };
+elem("d-cerrar").onclick = () => elem("velo-detalle").classList.remove("visible");
+
+["f-texto","f-tipo","f-estado","f-desde","f-hasta"].forEach(id =>
+  elem(id).onkeydown = e => { if (e.key === "Enter") { estado.pagina = 1; buscar(); } });
+
+function avisar(titulo, detalle = "", tipo = "") {
+  const caja = document.createElement("div");
+  caja.className = "flotante " + tipo;
+  caja.innerHTML = `<div class="t">${esc(titulo)}</div>` +
+                   (detalle ? `<div class="d">${esc(detalle)}</div>` : "");
+  elem("avisos").appendChild(caja);
+  setTimeout(() => caja.remove(), tipo === "mal" ? 8000 : 4000);
+}
+
+async function api(ruta) {
+  const r = await fetch(ruta, { headers: { "X-Admin-Key": claveInput.value } });
+  const cuerpo = await r.json().catch(() => ({}));
+
+  if (!r.ok) {
+    const error = new Error(cuerpo.error || `Error ${r.status}`);
+    error.detalle = cuerpo.detalle || "";
+    throw error;
+  }
+
+  return cuerpo;
+}
+
+async function buscar() {
+  sessionStorage.setItem("claveOperador", claveInput.value);
+
+  const parametros = new URLSearchParams();
+
+  const texto = elem("f-texto").value.trim();
+  if (texto) parametros.set("texto", texto);
+  if (elem("f-tipo").value) parametros.set("tipo", elem("f-tipo").value);
+  if (elem("f-estado").value) parametros.set("estado", elem("f-estado").value);
+  if (elem("f-desde").value) parametros.set("desde", elem("f-desde").value);
+  if (elem("f-hasta").value) parametros.set("hasta", elem("f-hasta").value);
+
+  parametros.set("pagina", estado.pagina);
+  parametros.set("porPagina", 25);
+
+  const boton = elem("btn-buscar");
+  boton.disabled = true;
+
+  try {
+    estado.ultima = await api("/admin/comprobantes?" + parametros);
+    pintar();
+  } catch (e) {
+    elem("resultados").innerHTML =
+      `<div class="vacio" style="color:var(--mal)">${esc(e.message)}</div>`;
+  } finally {
+    boton.disabled = false;
+  }
+}
+
+function pintar() {
+  const d = estado.ultima;
+
+  if (d.total === 0) {
+    elem("resultados").innerHTML =
+      `<div class="vacio">Ningún comprobante coincide con la búsqueda.</div>`;
+    return;
+  }
+
+  elem("resultados").innerHTML = `
+    <table>
+      <tr>
+        <th>Emisor</th><th>Comprobante</th><th>Fecha</th><th>Cliente</th>
+        <th class="num">Importe</th><th>Estado</th>
+        <th style="text-align:right">Archivos</th>
+      </tr>
+      ${d.resultados.map(fila).join("")}
+    </table>
+
+    <div class="paginacion">
+      <span>${d.total.toLocaleString("es-PE")}
+        ${d.total === 1 ? "comprobante" : "comprobantes"}</span>
+      <span>
+        <button class="mini" id="btn-anterior" ${d.pagina <= 1 ? "disabled" : ""}>Anterior</button>
+        <span style="margin:0 10px">Página ${d.pagina} de ${d.paginas}</span>
+        <button class="mini" id="btn-siguiente" ${d.pagina >= d.paginas ? "disabled" : ""}>Siguiente</button>
+      </span>
+    </div>`;
+
+  elem("btn-anterior").onclick = () => { estado.pagina--; buscar(); };
+  elem("btn-siguiente").onclick = () => { estado.pagina++; buscar(); };
+
+  document.querySelectorAll("[data-detalle]").forEach(b =>
+    b.onclick = () => verDetalle(b.dataset.detalle));
+
+  document.querySelectorAll("[data-descargar]").forEach(b =>
+    b.onclick = () => descargar(b.dataset.descargar, b.dataset.tipo, b));
+}
+
+function fila(c) {
+  return `<tr class="fila">
+    <td>
+      <div class="recorte" title="${esc(c.razonSocial)}">${esc(c.razonSocial)}</div>
+      <div class="mono tenue">${esc(c.ruc)}</div>
+    </td>
+    <td>
+      <div class="mono">${esc(c.numero)}</div>
+      <div class="tenue" style="font-size:12px">${nombreTipo(c.tipoComprobante)}</div>
+    </td>
+    <td class="tenue">${c.fechaEmision.slice(0,10)}</td>
+    <td>
+      <div class="recorte" title="${esc(c.receptorNombre)}">${esc(c.receptorNombre) || "—"}</div>
+      <div class="mono tenue">${esc(c.receptorDocumento)}</div>
+    </td>
+    <td class="num">${c.importeTotal.toLocaleString("es-PE",
+        { minimumFractionDigits:2 })} <span class="tenue">${esc(c.moneda)}</span></td>
+    <td>${insignia(c)}</td>
+    <td style="text-align:right;white-space:nowrap">
+      ${c.tieneXml ? `<button class="mini" data-descargar="${c.id}" data-tipo="xml">XML</button>` : ""}
+      ${c.tieneCdr ? `<button class="mini" data-descargar="${c.id}" data-tipo="cdr">CDR</button>` : ""}
+      ${c.estado !== "BORRADOR" ? `<button class="mini" data-descargar="${c.id}" data-tipo="pdf">PDF</button>` : ""}
+      <button class="mini" data-detalle="${c.id}">Detalle</button>
+    </td>
+  </tr>`;
+}
+
+function insignia(c) {
+  const mapa = {
+    ACEPTADO: ["i-ok", "aceptado"],
+    ACEPTADO_CON_OBSERVACIONES: ["i-aviso", "con observaciones"],
+    RECHAZADO: ["i-mal", "rechazado"],
+    ANULADO: ["i-tenue", "anulado"],
+    BORRADOR: ["i-aviso", "pendiente"],
+    ENCOLADO: ["i-aviso", "en proceso"],
+    ENVIADO: ["i-aviso", "enviado"],
+    FIRMADO: ["i-aviso", "firmado"]
+  };
+
+  const [clase, texto] = mapa[c.estado] || ["i-tenue", c.estado.toLowerCase()];
+
+  return `<span class="insignia ${clase}" title="${esc(c.mensajeSunat ?? "")}">${texto}</span>`;
+}
+
+const nombreTipo = t => ({
+  "01":"Factura", "03":"Boleta",
+  "07":"Nota de crédito", "08":"Nota de débito"
+}[t] || t);
+
+// DESCARGA CON CABECERA DE AUTENTICACIÓN.
+//
+// Un enlace normal no puede llevar la clave del operador, así que se pide
+// el archivo con fetch y se entrega al navegador como un blob. Es la única
+// forma de descargar desde un endpoint protegido sin exponer la clave en
+// la dirección, donde quedaría en el historial y en los registros del
+// servidor.
+async function descargar(id, tipo, boton) {
+  boton.disabled = true;
+
+  try {
+    const r = await fetch(`/admin/comprobantes/${id}/${tipo}`, {
+      headers: { "X-Admin-Key": claveInput.value }
+    });
+
+    if (!r.ok) {
+      const cuerpo = await r.json().catch(() => ({}));
+      avisar(cuerpo.error || cuerpo.title || "No se pudo descargar",
+             cuerpo.detalle || cuerpo.detail, "mal");
+      return;
+    }
+
+    const nombre = (r.headers.get("content-disposition") || "")
+      .match(/filename="?([^";]+)"?/)?.[1] || `${id}.${tipo}`;
+
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+
+    const enlace = document.createElement("a");
+    enlace.href = url;
+    enlace.download = nombre;
+    enlace.click();
+
+    URL.revokeObjectURL(url);
+
+  } catch (e) {
+    avisar("Error al descargar", e.message, "mal");
+  } finally {
+    boton.disabled = false;
+  }
+}
+
+async function verDetalle(id) {
+  const c = estado.ultima.resultados.find(x => x.id === id);
+
+  elem("d-titulo").textContent = `${c.numero} · ${nombreTipo(c.tipoComprobante)}`;
+  elem("d-sub").textContent = `${c.razonSocial} · ${c.ruc}`;
+  elem("d-cuerpo").innerHTML = `<div class="vacio">Cargando historial…</div>`;
+  elem("velo-detalle").classList.add("visible");
+
+  try {
+    const historial = await api(`/admin/comprobantes/${id}/historial`);
+
+    elem("d-cuerpo").innerHTML = `
+      ${c.mensajeSunat ? `
+        <div style="background:var(--sutil);border-radius:var(--radio);
+                    padding:11px 13px;margin-bottom:14px;font-size:13.5px">
+          <strong>SUNAT ${esc(c.codigoSunat ?? "")}:</strong>
+          ${esc(c.mensajeSunat)}
+        </div>` : ""}
+
+      <table>
+        <tr><th>#</th><th>Transición</th><th>Código</th><th>Mensaje</th>
+            <th>Duración</th><th>Cuándo</th></tr>
+        ${historial.map(h => `<tr>
+          <td>${h.intento}</td>
+          <td class="tenue" style="white-space:nowrap">
+            ${esc(h.desde ?? "—")} → ${esc(h.hasta)}</td>
+          <td class="mono">${esc(h.codigoSunat ?? "—")}</td>
+          <td style="font-size:12.5px">${esc(h.mensaje ?? "")}</td>
+          <td class="tenue num">${h.duracionMs ? h.duracionMs + " ms" : ""}</td>
+          <td class="tenue" style="white-space:nowrap">
+            ${new Date(h.fecha).toLocaleString("es-PE")}</td>
+        </tr>`).join("")}
+      </table>`;
+
+  } catch (e) {
+    elem("d-cuerpo").innerHTML =
+      `<div class="vacio" style="color:var(--mal)">${esc(e.message)}</div>`;
+  }
+}
+
+if (claveInput.value) buscar();
+</script>
+</body>
+</html>
