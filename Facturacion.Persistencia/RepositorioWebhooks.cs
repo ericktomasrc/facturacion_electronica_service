@@ -5,15 +5,32 @@ using Npgsql;
 namespace Facturacion.Persistencia;
 
 /// <summary>Un webhook configurado por una empresa.</summary>
+///
+/// LOS EVENTOS SE LEEN COMO TEXTO, NO COMO ARREGLO.
+///
+/// La columna es un text[] de PostgreSQL, y Dapper la entrega como
+/// System.Array sin convertirla a string[]. El error que produce habla de
+/// constructores, igual que pasó con count(*) devolviendo bigint y con las
+/// columnas date.
+///
+/// Leerlo como una cadena separada por comas y dividirla aquí evita el
+/// problema por completo, y cuesta menos que configurar un conversor.
 public record WebhookAdmin(
     Guid Id,
     string Nombre,
     string Url,
-    string[] Eventos,
+    string? EventosTexto,
     bool Activo,
     DateTime CreadoEn,
     int Pendientes,
-    int Agotados);
+    int Agotados)
+{
+    /// <summary>Vacío significa que está suscrito a todos los eventos.</summary>
+    public string[] Eventos =>
+        string.IsNullOrWhiteSpace(EventosTexto)
+            ? []
+            : EventosTexto.Split(',', StringSplitOptions.RemoveEmptyEntries);
+}
 
 /// <summary>Una entrega pendiente de despachar.</summary>
 public record EntregaPendiente(
@@ -87,7 +104,11 @@ public sealed class RepositorioWebhooks
                 SELECT w.id        AS "Id",
                        w.nombre    AS "Nombre",
                        w.url       AS "Url",
-                       w.eventos   AS "Eventos",
+
+                       -- El arreglo se aplana a texto para que Dapper lo
+                       -- pueda materializar sin conversores.
+                       array_to_string(w.eventos, ',') AS "EventosTexto",
+
                        w.activo    AS "Activo",
                        w.creado_en AS "CreadoEn",
 

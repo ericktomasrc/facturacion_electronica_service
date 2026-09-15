@@ -125,6 +125,8 @@
   tr:last-child td { border-bottom:none; }
 
   .mono { font-family:ui-monospace, Consolas, monospace; font-size:13px; }
+  .recorte { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  td.mal, .mal { color:var(--mal); }
 
   /* La fila recién creada. El resaltado se va solo a los pocos segundos:
      sirve para encontrarla, no para quedarse ahí. */
@@ -285,13 +287,15 @@ const estado = {
   series: [],
   claves: [],
   certificados: [],
+  webhooks: [],
+  entregas: [],
 
   // Identificador de lo recién creado en cada pestaña, para resaltarlo.
-  recien: { series:null, claves:null, certificado:null },
+  recien: { series:null, claves:null, certificado:null, webhooks:null },
 
   // Filtro de texto de cada pestaña. Son independientes: buscar en claves
   // no debe alterar lo que ves al volver a series.
-  filtro: { series:"", claves:"", certificado:"" }
+  filtro: { series:"", claves:"", certificado:"", webhooks:"" }
 };
 
 const claveInput = elem("clave");
@@ -498,7 +502,7 @@ function pintarDetalle() {
     </div>
 
     <div class="pestanas">
-      ${["series","claves","certificado"].map(p => `
+      ${["series","claves","certificado","webhooks"].map(p => `
         <button class="pestana ${estado.pestana === p ? "activa" : ""}"
                 data-pestana="${p}">${nombrePestana(p)}</button>`).join("")}
     </div>
@@ -516,8 +520,12 @@ function pintarDetalle() {
   cargarPestana();
 }
 
-const nombrePestana = p =>
-  ({ series:"Series", claves:"Claves de acceso", certificado:"Certificado" }[p]);
+const nombrePestana = p => ({
+  series: "Series",
+  claves: "Claves de acceso",
+  certificado: "Certificado",
+  webhooks: "Webhooks"
+}[p]);
 
 function estadoCertificado(t) {
   if (!t.tieneCertificado)
@@ -560,6 +568,20 @@ async function cargarPestana() {
       enlazarFiltro("claves", () => {
         elem("tabla-claves").innerHTML = tablaClaves();
         enlazarRevocar();
+      });
+
+    } else if (estado.pestana === "webhooks") {
+      estado.webhooks = await api(`/admin/tenants/${id}/webhooks`);
+      estado.entregas = await api(`/admin/tenants/${id}/webhook-entregas?limite=20`);
+
+      cuerpo.innerHTML = vistaWebhooks();
+      elem("btn-webhook").onclick = crearWebhook;
+
+      enlazarAccionesWebhook();
+
+      enlazarFiltro("webhooks", () => {
+        elem("tabla-webhooks").innerHTML = tablaWebhooks();
+        enlazarAccionesWebhook();
       });
 
     } else {
@@ -860,7 +882,235 @@ function filtrar(clave) {
   if (clave === "claves")
     return estado.claves.filter(x => coincide(x, f));
 
+  if (clave === "webhooks")
+    return estado.webhooks.filter(x => coincide(x, f, x.eventos ?? []));
+
   return estado.certificados.filter(x => coincide(x, f));
+}
+
+function vistaWebhooks() {
+  return `
+    <div class="rejilla" style="margin-top:0">
+      <label>Nombre<input id="w-nombre" placeholder="ERP del cliente"></label>
+      <label>URL de destino
+        <input id="w-url" placeholder="https://sistema-del-cliente.com/avisos">
+        <div class="err" id="e-url"></div></label>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+      <button id="btn-webhook">Registrar webhook</button>
+      <span class="tenue" style="font-size:12.5px">
+        El secreto de firma se muestra una sola vez.
+      </span>
+    </div>
+
+    <div id="w-resultado"></div>
+
+    ${estado.webhooks.length === 0
+      ? `<div class="vacio" style="border-top:1px solid var(--borde)">
+           Sin webhooks. El cliente tendrá que consultar el estado por su cuenta.</div>`
+      : barraFiltro("webhooks", estado.webhooks.length,
+                    filtrar("webhooks").length) +
+        `<div id="tabla-webhooks">${tablaWebhooks()}</div>`}
+
+    ${estado.entregas.length === 0 ? "" : `
+      <h2 style="margin-top:26px">Últimas entregas</h2>
+      ${tablaEntregas()}`}`;
+}
+
+function tablaWebhooks() {
+  const filas = filtrar("webhooks");
+
+  if (filas.length === 0)
+    return `<div class="vacio">Ningún webhook coincide con la búsqueda.</div>`;
+
+  return `<table>
+      <tr><th>Nombre</th><th>URL</th><th>Pendientes</th><th>Agotadas</th>
+          <th>Estado</th><th style="text-align:right">Acciones</th></tr>
+      ${filas.map(w => `<tr class="${w.id === estado.recien.webhooks ? "recien" : ""}
+                                    ${w.activo ? "" : "fila-inactiva"}">
+        <td>${esc(w.nombre)}</td>
+        <td class="mono recorte" title="${esc(w.url)}"
+            style="max-width:230px">${esc(w.url)}</td>
+        <td>${w.pendientes}</td>
+        <td class="${w.agotados > 0 ? "mal" : ""}">${w.agotados}</td>
+        <td>${w.activo
+            ? `<span class="insignia i-ok">activo</span>`
+            : `<span class="insignia i-tenue">inactivo</span>`}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="mini" data-probar-wh="${w.id}">Probar</button>
+          <button class="mini" data-alternar-wh="${w.id}"
+                  data-activo="${w.activo}">${w.activo ? "Desactivar" : "Activar"}</button>
+          <button class="mini peligro" data-borrar-wh="${w.id}"
+                  data-wh-nombre="${esc(w.nombre)}">Eliminar</button>
+        </td>
+      </tr>`).join("")}
+    </table>`;
+}
+
+function tablaEntregas() {
+  return `<table>
+      <tr><th>Evento</th><th>Estado</th><th>Intentos</th><th>Detalle</th>
+          <th>Cuándo</th><th></th></tr>
+      ${estado.entregas.map(e => `<tr>
+        <td class="mono" style="font-size:12.5px">${esc(e.tipo)}</td>
+        <td>${insigniaEntrega(e.estado)}</td>
+        <td>${e.intentos}</td>
+        <td class="recorte tenue" style="max-width:260px"
+            title="${esc(e.ultimoError ?? "")}">
+          ${e.ultimoCodigo ? `HTTP ${e.ultimoCodigo}` : ""}
+          ${esc(e.ultimoError ?? "")}</td>
+        <td class="tenue">${new Date(e.creadoEn).toLocaleString("es-PE")}</td>
+        <td>${e.estado === "AGOTADO"
+            ? `<button class="mini" data-reintentar-entrega="${e.id}">Reintentar</button>`
+            : ""}</td>
+      </tr>`).join("")}
+    </table>`;
+}
+
+const insigniaEntrega = estado => ({
+  ENTREGADO: `<span class="insignia i-ok">entregado</span>`,
+  PENDIENTE: `<span class="insignia i-aviso">pendiente</span>`,
+  AGOTADO:   `<span class="insignia i-mal">agotado</span>`
+}[estado] || esc(estado));
+
+function enlazarAccionesWebhook() {
+  document.querySelectorAll("[data-probar-wh]").forEach(b =>
+    b.onclick = () => probarWebhook(b.dataset.probarWh));
+
+  document.querySelectorAll("[data-alternar-wh]").forEach(b =>
+    b.onclick = () => alternarWebhook(
+      b.dataset.alternarWh, b.dataset.activo !== "true"));
+
+  document.querySelectorAll("[data-borrar-wh]").forEach(b =>
+    b.onclick = () => eliminarWebhook(b.dataset.borrarWh, b.dataset.whNombre));
+
+  document.querySelectorAll("[data-reintentar-entrega]").forEach(b =>
+    b.onclick = () => reintentarEntrega(b.dataset.reintentarEntrega));
+}
+
+async function crearWebhook() {
+  const url = elem("w-url").value.trim();
+  const caja = elem("e-url");
+
+  if (!/^https?:\/\/.+/i.test(url)) {
+    caja.textContent = "Debe ser una dirección completa, con https:// delante.";
+    elem("w-url").parentElement.classList.add("invalido");
+    return;
+  }
+
+  caja.textContent = "";
+  elem("w-url").parentElement.classList.remove("invalido");
+
+  const boton = elem("btn-webhook");
+  boton.disabled = true;
+
+  try {
+    const r = await api(`/admin/tenants/${estado.seleccionada.id}/webhooks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        nombre: elem("w-nombre").value.trim() || "Sin nombre",
+        url,
+        eventos: []
+      })
+    });
+
+    // Igual que con las claves: el secreto se muestra fijo, no como aviso
+    // flotante. Es la única vez que existe fuera del cliente.
+    elem("w-resultado").innerHTML = `
+      <div class="secreto">
+        <strong>Entrega este secreto al cliente ahora.</strong>
+        <code>${esc(r.secreto)}</code>
+        <button class="mini" id="btn-copiar-secreto">Copiar</button>
+        <div class="tenue" style="font-size:12.5px;margin-top:8px">${esc(r.aviso)}</div>
+      </div>`;
+
+    elem("btn-copiar-secreto").onclick = async () => {
+      await navigator.clipboard.writeText(r.secreto);
+      avisar("Secreto copiado", "", "ok");
+    };
+
+    elem("w-nombre").value = "";
+    elem("w-url").value = "";
+
+    marcarRecien("webhooks", r.id);
+
+    estado.webhooks = await api(`/admin/tenants/${estado.seleccionada.id}/webhooks`);
+
+    const tabla = elem("tabla-webhooks");
+    if (tabla) { tabla.innerHTML = tablaWebhooks(); enlazarAccionesWebhook(); }
+    else cargarPestana();
+
+  } catch (e) {
+    avisar(e.message, e.detalle, "mal");
+  } finally {
+    boton.disabled = false;
+  }
+}
+
+async function probarWebhook(id) {
+  try {
+    const r = await api(
+      `/admin/tenants/${estado.seleccionada.id}/webhooks/${id}/prueba`,
+      { method: "POST" });
+
+    avisar("Aviso de prueba encolado", r.mensaje, "ok");
+
+    // Se espera al ciclo del despachador antes de refrescar, o la entrega
+    // aparecería siempre como pendiente y parecería que no funciona.
+    setTimeout(() => {
+      if (estado.pestana === "webhooks") cargarPestana();
+    }, 12000);
+
+  } catch (e) { avisar(e.message, e.detalle, "mal"); }
+}
+
+async function alternarWebhook(id, activar) {
+  try {
+    await api(`/admin/tenants/${estado.seleccionada.id}/webhooks/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ activo: activar })
+    });
+
+    avisar(activar ? "Webhook activado" : "Webhook desactivado", "", "ok");
+    await cargarPestana();
+
+  } catch (e) { avisar(e.message, e.detalle, "mal"); }
+}
+
+async function eliminarWebhook(id, nombre) {
+  const seguro = await confirmar(
+    `Eliminar el webhook ${nombre}`,
+    "El cliente dejará de recibir avisos de inmediato y se borrará su " +
+    "historial de entregas. Si solo quieres pausarlo, desactívalo.",
+    "Eliminar");
+
+  if (!seguro) return;
+
+  try {
+    await api(`/admin/tenants/${estado.seleccionada.id}/webhooks/${id}`,
+              { method: "DELETE" });
+
+    avisar("Webhook eliminado", "", "ok");
+    await cargarPestana();
+
+  } catch (e) { avisar(e.message, e.detalle, "mal"); }
+}
+
+async function reintentarEntrega(id) {
+  try {
+    await api(`/admin/webhook-entregas/${id}/reintentar`, { method: "POST" });
+
+    avisar("Entrega devuelta a la cola",
+           "Se enviará en el siguiente ciclo.", "ok");
+
+    setTimeout(() => {
+      if (estado.pestana === "webhooks") cargarPestana();
+    }, 12000);
+
+  } catch (e) { avisar(e.message, e.detalle, "mal"); }
 }
 
 const nombreTipo = t =>

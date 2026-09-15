@@ -81,20 +81,46 @@ builder.Services.AddSwaggerGen(opciones =>
         Version = "v1",
         Description =
             "Emisión de comprobantes electrónicos para SUNAT.\n\n" +
-            "Toda petición requiere una clave de acceso. La clave determina " +
-            "qué empresa emite: el RUC del emisor NO se envía en el cuerpo.\n\n" +
-            "Pulsa **Authorize** y pega la clave de desarrollo:\n\n" +
-            "`fac_dev_UkV5QkFOX0RFU0FSUk9MTE9fMjAyNg`"
+            "Toda petición requiere una clave de acceso.\n\n" +
+            "**Emisión y consulta** (`/v1/*`): la clave determina qué empresa " +
+            "emite, así que el RUC del emisor NO se envía en el cuerpo. " +
+            "En Authorize, campo `ApiKey`, escribe:\n\n" +
+            "`Bearer fac_dev_UkV5QkFOX0RFU0FSUk9MTE9fMjAyNg`\n\n" +
+            "**Administración** (`/admin/*`): usa la clave del operador, que " +
+            "es distinta porque da acceso a los datos de todas las empresas. " +
+            "En Authorize, campo `AdminKey`, escribe solo:\n\n" +
+            "`operador-dev-2026`"
     });
 
-    // El botón Authorize de la interfaz.
+    // DOS ESQUEMAS DE AUTENTICACIÓN, Y ES A PROPÓSITO.
+    //
+    // Los emisores usan su clave en Authorization: Bearer. Los endpoints de
+    // operación usan una clave distinta en X-Admin-Key, porque muestran datos
+    // de TODAS las empresas.
+    //
+    // Declarar los dos en Swagger no es un detalle cosmético: sin el segundo,
+    // toda la administración había que probarla escribiendo comandos a mano,
+    // y eso hace que se pruebe menos.
+
     opciones.AddSecurityDefinition("ApiKey", new OpenApiSecurityScheme
     {
         Name = "Authorization",
         Type = SecuritySchemeType.ApiKey,
         In = ParameterLocation.Header,
-        Description = "Escribe: Bearer {tu clave}",
+        Description =
+            "Clave del EMISOR. Escribe: Bearer {tu clave}\n\n" +
+            "Sirve para /v1/*: emitir comprobantes y consultarlos.",
         Scheme = "Bearer"
+    });
+
+    opciones.AddSecurityDefinition("AdminKey", new OpenApiSecurityScheme
+    {
+        Name = "X-Admin-Key",
+        Type = SecuritySchemeType.ApiKey,
+        In = ParameterLocation.Header,
+        Description =
+            "Clave del OPERADOR de la plataforma. Escribe solo la clave, sin prefijo.\n\n" +
+            "Sirve para /admin/*: empresas, certificados, series, claves y webhooks."
     });
 
     opciones.AddSecurityRequirement(new OpenApiSecurityRequirement
@@ -106,6 +132,17 @@ builder.Services.AddSwaggerGen(opciones =>
                 {
                     Type = ReferenceType.SecurityScheme,
                     Id = "ApiKey"
+                }
+            },
+            Array.Empty<string>()
+        },
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "AdminKey"
                 }
             },
             Array.Empty<string>()
