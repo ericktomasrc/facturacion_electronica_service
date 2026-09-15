@@ -84,6 +84,16 @@ public sealed class ColaTrabajos
                     SELECT id
                       FROM comprobantes
                      WHERE estado = 'BORRADOR'
+
+                       -- LAS BOLETAS NO SE ENVÍAN DE UNA EN UNA.
+                       --
+                       -- Van agrupadas en el resumen diario, que tiene su
+                       -- propio proceso. Si este worker las tomara, cada
+                       -- boleta intentaría un envío individual que SUNAT
+                       -- rechaza, y la cola se llenaría de trabajos
+                       -- condenados.
+                       AND tipo_comprobante <> '03'
+
                        -- Respeta la espera del backoff: un comprobante que
                        -- falló hace poco no se vuelve a tomar hasta que
                        -- llegue su momento.

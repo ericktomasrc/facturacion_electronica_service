@@ -141,6 +141,7 @@ app.UseMiddleware<AutenticacionApiKey>();
 
 app.MapearDiagnostico();
 app.MapearAdministracion();
+app.MapearNotas();
 app.MapearDescargas();
 
 app.MapGet("/health", () => Results.Ok(new { estado = "vivo" }))

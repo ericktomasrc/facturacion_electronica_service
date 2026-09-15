@@ -128,6 +128,7 @@
 
   /* La fila recién creada. El resaltado se va solo a los pocos segundos:
      sirve para encontrarla, no para quedarse ahí. */
+  tr.fila-inactiva td:not(:last-child) { opacity:.55; }
   tr.recien { background:var(--ok-fondo); }
   tr.recien td:first-child { box-shadow:inset 3px 0 0 var(--ok); }
 
@@ -542,8 +543,11 @@ async function cargarPestana() {
       cuerpo.innerHTML = vistaSeries();
       elem("btn-serie").onclick = crearSerie;
 
+      enlazarAccionesSerie();
+
       enlazarFiltro("series", () => {
         elem("tabla-series").innerHTML = tablaSeries();
+        enlazarAccionesSerie();
       });
 
     } else if (estado.pestana === "claves") {
@@ -563,8 +567,11 @@ async function cargarPestana() {
       cuerpo.innerHTML = vistaCertificado();
       elem("btn-certificado").onclick = subirCertificado;
 
+      enlazarAccionesCertificado();
+
       enlazarFiltro("certificado", () => {
         elem("tabla-certificado").innerHTML = tablaCertificados();
+        enlazarAccionesCertificado();
       });
 
       // El input de archivo está oculto: hay que reflejar el nombre elegido
@@ -619,14 +626,40 @@ function tablaSeries() {
     return `<div class="vacio">Ninguna serie coincide con la búsqueda.</div>`;
 
   return `<table>
-      <tr><th>Tipo</th><th>Serie</th><th>Último emitido</th><th>Siguiente</th></tr>
-      ${filas.map(s => `<tr class="${s.id === estado.recien.series ? "recien" : ""}">
+      <tr><th>Tipo</th><th>Serie</th><th>Emitidos</th><th>Siguiente</th>
+          <th>Estado</th><th style="text-align:right">Acciones</th></tr>
+      ${filas.map(s => `<tr class="${s.id === estado.recien.series ? "recien" : ""}
+                                    ${s.activo ? "" : "fila-inactiva"}">
         <td>${nombreTipo(s.tipoComprobante)}</td>
         <td class="mono">${esc(s.serie)}</td>
-        <td>${s.ultimoCorrelativo}</td>
+        <td>${s.comprobantes}</td>
         <td class="tenue">${s.ultimoCorrelativo + 1}</td>
+        <td>${s.activo
+            ? `<span class="insignia i-ok">activa</span>`
+            : `<span class="insignia i-tenue">cerrada</span>`}</td>
+        <td style="text-align:right;white-space:nowrap">
+          ${accionesSerie(s)}
+        </td>
       </tr>`).join("")}
     </table>`;
+}
+
+/// Qué se puede hacer con una serie depende de si ya se usó.
+///
+/// Sin comprobantes se puede borrar sin consecuencias. Con comprobantes
+/// solo se puede cerrar: borrarla dejaría huérfano el rastro de esa
+/// numeración, y eso es un problema tributario, no de datos.
+function accionesSerie(s) {
+  if (s.sePuedeEliminar)
+    return `<button class="mini peligro" data-borrar-serie="${s.id}"
+              data-serie-nombre="${esc(s.serie)}">Eliminar</button>`;
+
+  return s.activo
+    ? `<button class="mini" data-cerrar-serie="${s.id}"
+         data-serie-nombre="${esc(s.serie)}"
+         title="Deja de poder emitir. El histórico no se toca.">Cerrar</button>`
+    : `<button class="mini" data-abrir-serie="${s.id}"
+         data-serie-nombre="${esc(s.serie)}">Reactivar</button>`;
 }
 
 function vistaClaves() {
@@ -716,14 +749,26 @@ function tablaCertificados() {
     return `<div class="vacio">Ningún certificado coincide con la búsqueda.</div>`;
 
   return `<table>
-      <tr><th>Titular</th><th>Vence</th><th>Estado</th></tr>
-      ${filas.map(c => `<tr class="${c.id === estado.recien.certificado ? "recien" : ""}">
+      <tr><th>Titular</th><th>Vence</th><th>Firmó</th><th>Estado</th>
+          <th style="text-align:right">Acciones</th></tr>
+      ${filas.map(c => `<tr class="${c.id === estado.recien.certificado ? "recien" : ""}
+                                    ${c.activo ? "" : "fila-inactiva"}">
         <td style="font-size:13px">${esc(c.subject)}</td>
         <td class="mono">${c.validoHasta.slice(0,10)}</td>
+        <td>${c.comprobantesFirmados}</td>
         <td>${c.activo
             ? `<span class="insignia ${c.diasParaVencer <= 30 ? "i-aviso" : "i-ok"}">
                  activo · ${c.diasParaVencer} d</span>`
             : `<span class="insignia i-tenue">reemplazado</span>`}</td>
+        <td style="text-align:right;white-space:nowrap">
+          ${c.sePuedeEliminar
+            ? `<button class="mini peligro" data-borrar-cert="${c.id}">Eliminar</button>`
+            : `<span class="tenue" style="font-size:12px"
+                 title="${c.activo
+                   ? "Es el certificado en uso."
+                   : "Firmó comprobantes: hay que conservarlo para poder verificar esas firmas."}">
+                 ${c.activo ? "en uso" : "se conserva"}</span>`}
+        </td>
       </tr>`).join("")}
     </table>`;
 }
@@ -778,6 +823,22 @@ function enlazarFiltro(clave, repintarTabla) {
 function enlazarRevocar() {
   document.querySelectorAll("[data-revocar]").forEach(b =>
     b.onclick = () => revocar(b.dataset.revocar));
+}
+
+function enlazarAccionesSerie() {
+  document.querySelectorAll("[data-borrar-serie]").forEach(b =>
+    b.onclick = () => eliminarSerie(b.dataset.borrarSerie, b.dataset.serieNombre));
+
+  document.querySelectorAll("[data-cerrar-serie]").forEach(b =>
+    b.onclick = () => cambiarSerie(b.dataset.cerrarSerie, false, b.dataset.serieNombre));
+
+  document.querySelectorAll("[data-abrir-serie]").forEach(b =>
+    b.onclick = () => cambiarSerie(b.dataset.abrirSerie, true, b.dataset.serieNombre));
+}
+
+function enlazarAccionesCertificado() {
+  document.querySelectorAll("[data-borrar-cert]").forEach(b =>
+    b.onclick = () => eliminarCertificado(b.dataset.borrarCert));
 }
 
 function textoConteo(clave) {
@@ -934,9 +995,16 @@ function marcarRecien(pestana, id) {
     const tabla = elem("tabla-" + pestana);
     if (!tabla) return;
 
-    if (pestana === "series") tabla.innerHTML = tablaSeries();
-    else if (pestana === "claves") { tabla.innerHTML = tablaClaves(); enlazarRevocar(); }
-    else tabla.innerHTML = tablaCertificados();
+    if (pestana === "series") {
+      tabla.innerHTML = tablaSeries();
+      enlazarAccionesSerie();
+    } else if (pestana === "claves") {
+      tabla.innerHTML = tablaClaves();
+      enlazarRevocar();
+    } else {
+      tabla.innerHTML = tablaCertificados();
+      enlazarAccionesCertificado();
+    }
   }, 6000);
 }
 
@@ -1028,6 +1096,70 @@ async function crearClave() {
   } finally {
     boton.disabled = false;
   }
+}
+
+async function eliminarSerie(id, nombre) {
+  const seguro = await confirmar(
+    `Eliminar la serie ${nombre}`,
+    "Esta serie nunca emitió comprobantes, así que se puede borrar sin " +
+    "consecuencias. Si después la necesitas, hay que volver a darla de alta.",
+    "Eliminar");
+
+  if (!seguro) return;
+
+  try {
+    await api(`/admin/tenants/${estado.seleccionada.id}/series/${id}`,
+              { method: "DELETE" });
+
+    avisar(`Serie ${nombre} eliminada`, "", "ok");
+    await recargar();
+
+  } catch (e) { avisar(e.message, e.detalle, "mal"); }
+}
+
+async function cambiarSerie(id, activar, nombre) {
+  if (!activar) {
+    const seguro = await confirmar(
+      `Cerrar la serie ${nombre}`,
+      "Dejará de poder emitir comprobantes. Los que ya emitió NO se tocan: " +
+      "siguen consultándose y descargándose igual. Puedes reactivarla después.",
+      "Cerrar serie");
+
+    if (!seguro) return;
+  }
+
+  try {
+    await api(`/admin/tenants/${estado.seleccionada.id}/series/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ activo: activar })
+    });
+
+    avisar(activar ? `Serie ${nombre} reactivada` : `Serie ${nombre} cerrada`,
+           "", "ok");
+
+    await recargar();
+
+  } catch (e) { avisar(e.message, e.detalle, "mal"); }
+}
+
+async function eliminarCertificado(id) {
+  const seguro = await confirmar(
+    "Eliminar certificado",
+    "Este certificado nunca firmó comprobantes y no está en uso, así que se " +
+    "puede borrar. Es lo que se hace cuando se cargó el archivo equivocado.",
+    "Eliminar");
+
+  if (!seguro) return;
+
+  try {
+    await api(`/admin/tenants/${estado.seleccionada.id}/certificados/${id}`,
+              { method: "DELETE" });
+
+    avisar("Certificado eliminado", "", "ok");
+    await recargar();
+
+  } catch (e) { avisar(e.message, e.detalle, "mal"); }
 }
 
 async function revocar(id) {

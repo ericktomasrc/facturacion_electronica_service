@@ -36,13 +36,26 @@ public class NuevoTenant
 }
 
 /// <summary>Una serie de numeración.</summary>
+/// <param name="Comprobantes">
+/// Cuántos comprobantes se emitieron con esta serie. Determina si se puede
+/// eliminar: con uno solo, ya hay histórico que conservar.
+/// </param>
 public record SerieAdmin(
     Guid Id,
     string TipoComprobante,
     string Serie,
     int UltimoCorrelativo,
     bool Activo,
-    DateTime CreadoEn);
+    DateTime CreadoEn,
+    int Comprobantes)
+{
+    /// <summary>
+    /// Una serie sin comprobantes se puede borrar sin consecuencias.
+    /// Con comprobantes, borrarla dejaría huérfano el rastro de esa
+    /// numeración, y eso es un problema tributario, no de datos.
+    /// </summary>
+    public bool SePuedeEliminar => Comprobantes == 0;
+}
 
 /// <summary>Una clave de acceso, sin el secreto.</summary>
 public record ClaveAdmin(
@@ -175,21 +188,27 @@ public sealed class RepositorioAdmin
         var filas = await conexion.QueryAsync<SerieAdmin>(
             new CommandDefinition(
                 """
-                SELECT id                 AS "Id",
-                       tipo_comprobante   AS "TipoComprobante",
-                       serie              AS "Serie",
-                       ultimo_correlativo AS "UltimoCorrelativo",
-                       activo             AS "Activo",
-                       creado_en          AS "CreadoEn"
-                  FROM series
-                 WHERE tenant_id = @tenantId
+                SELECT s.id                 AS "Id",
+                       s.tipo_comprobante   AS "TipoComprobante",
+                       s.serie              AS "Serie",
+                       s.ultimo_correlativo AS "UltimoCorrelativo",
+                       s.activo             AS "Activo",
+                       s.creado_en          AS "CreadoEn",
+
+                       (SELECT count(*)::int FROM comprobantes c
+                         WHERE c.tenant_id = s.tenant_id
+                           AND c.tipo_comprobante = s.tipo_comprobante
+                           AND c.serie = s.serie)  AS "Comprobantes"
+
+                  FROM series s
+                 WHERE s.tenant_id = @tenantId
                  -- La más reciente primero.
                  --
                  -- El orden por tipo y serie se lee mejor, pero obliga a
                  -- buscar en toda la tabla la que acabas de crear. Como una
                  -- empresa tiene pocas series, la comodidad de verla arriba
                  -- pesa más que la prolijidad del agrupamiento.
-                 ORDER BY creado_en DESC
+                 ORDER BY s.creado_en DESC
                 """,
                 new { tenantId }, cancellationToken: ct));
 
@@ -220,6 +239,60 @@ public sealed class RepositorioAdmin
             """,
             new { tenantId, tipoComprobante, serie, correlativoInicial },
             cancellationToken: ct));
+    }
+
+    /// <summary>
+    /// Elimina una serie, pero SOLO si nunca se usó.
+    ///
+    /// La comprobación va dentro del mismo DELETE, no en una consulta previa:
+    /// entre comprobar y borrar hay una ventana en la que alguien podría
+    /// emitir un comprobante con esa serie. Hacerlo en una sola sentencia
+    /// cierra esa ventana.
+    ///
+    /// Devuelve false si la serie no existe o si ya tiene comprobantes.
+    /// </summary>
+    public async Task<bool> EliminarSerieAsync(
+        Guid tenantId, Guid serieId, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+
+        var filas = await conexion.ExecuteAsync(new CommandDefinition(
+            """
+            DELETE FROM series s
+             WHERE s.id = @serieId
+               AND s.tenant_id = @tenantId
+               AND NOT EXISTS (
+                     SELECT 1 FROM comprobantes c
+                      WHERE c.tenant_id = s.tenant_id
+                        AND c.tipo_comprobante = s.tipo_comprobante
+                        AND c.serie = s.serie)
+            """,
+            new { tenantId, serieId }, cancellationToken: ct));
+
+        return filas > 0;
+    }
+
+    /// <summary>
+    /// Activa o desactiva una serie.
+    ///
+    /// Desactivarla impide emitir con ella, pero NO toca el histórico: los
+    /// comprobantes ya emitidos siguen consultándose y descargándose igual.
+    /// Es lo que se hace cuando una sucursal cierra, cuando cambia el esquema
+    /// de numeración, o cuando hay que cerrar una serie y abrir otra.
+    /// </summary>
+    public async Task<bool> CambiarEstadoSerieAsync(
+        Guid tenantId, Guid serieId, bool activo, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+
+        var filas = await conexion.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE series SET activo = @activo
+             WHERE id = @serieId AND tenant_id = @tenantId
+            """,
+            new { tenantId, serieId, activo }, cancellationToken: ct));
+
+        return filas > 0;
     }
 
     // --------------------------------------------------------------- claves

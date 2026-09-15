@@ -1,0 +1,98 @@
+### Ejemplos de notas de crédito y débito
+### Ajusta el puerto y los números al de tu instalación.
+
+@base = https://localhost:7295
+@clave = fac_dev_UkV5QkFOX0RFU0FSUk9MTE9fMjAyNg
+
+### 1. Nota de crédito: anulación total de una factura
+### Repite las mismas líneas de la factura original.
+POST {{base}}/v1/notas-credito
+Authorization: Bearer {{clave}}
+Content-Type: application/json
+
+{
+  "serie": "FC01",
+  "codigoMotivo": "01",
+  "descripcionMotivo": "ANULACION POR ERROR EN EL MONTO",
+  "afectado": {
+    "tipoDocumento": "01",
+    "serie": "F001",
+    "correlativo": 2
+  },
+  "receptor": {
+    "tipoDocumento": "6",
+    "numeroDocumento": "20512345678",
+    "razonSocial": "CLIENTE DE PRUEBA SAC"
+  },
+  "lineas": [
+    { "descripcion": "PRODUCTO DE PRUEBA", "cantidad": 2, "valorUnitario": 50.00 }
+  ]
+}
+
+### 2. Nota de crédito parcial: devolución de una unidad
+POST {{base}}/v1/notas-credito
+Authorization: Bearer {{clave}}
+Content-Type: application/json
+
+{
+  "serie": "FC01",
+  "codigoMotivo": "07",
+  "descripcionMotivo": "DEVOLUCION DE UNA UNIDAD",
+  "afectado": { "tipoDocumento": "01", "serie": "F001", "correlativo": 3 },
+  "receptor": {
+    "tipoDocumento": "6",
+    "numeroDocumento": "20512345678",
+    "razonSocial": "CLIENTE DE PRUEBA SAC"
+  },
+  "lineas": [
+    { "descripcion": "PRODUCTO DE PRUEBA", "cantidad": 1, "valorUnitario": 50.00 }
+  ]
+}
+
+### 3. Nota de débito: interés por mora
+POST {{base}}/v1/notas-debito
+Authorization: Bearer {{clave}}
+Content-Type: application/json
+
+{
+  "serie": "FD01",
+  "codigoMotivo": "01",
+  "descripcionMotivo": "INTERES POR MORA",
+  "afectado": { "tipoDocumento": "01", "serie": "F001", "correlativo": 4 },
+  "receptor": {
+    "tipoDocumento": "6",
+    "numeroDocumento": "20512345678",
+    "razonSocial": "CLIENTE DE PRUEBA SAC"
+  },
+  "lineas": [
+    { "descripcion": "INTERES POR PAGO FUERA DE PLAZO", "unidadMedida": "ZZ",
+      "cantidad": 1, "valorUnitario": 25.00 }
+  ]
+}
+
+### 4. Debe fallar: serie que no corresponde
+### Afecta a una factura pero la serie empieza con B.
+POST {{base}}/v1/notas-credito
+Authorization: Bearer {{clave}}
+Content-Type: application/json
+
+{
+  "serie": "BC01",
+  "codigoMotivo": "01",
+  "afectado": { "tipoDocumento": "01", "serie": "F001", "correlativo": 2 },
+  "receptor": { "tipoDocumento": "6", "numeroDocumento": "20512345678", "razonSocial": "X" },
+  "lineas": [ { "descripcion": "X", "cantidad": 1, "valorUnitario": 10 } ]
+}
+
+### 5. Debe fallar: el documento afectado no existe
+POST {{base}}/v1/notas-credito
+Authorization: Bearer {{clave}}
+Content-Type: application/json
+
+{
+  "serie": "FC01",
+  "codigoMotivo": "01",
+  "afectado": { "tipoDocumento": "01", "serie": "F999", "correlativo": 9999 },
+  "receptor": { "tipoDocumento": "6", "numeroDocumento": "20512345678", "razonSocial": "X" },
+  "lineas": [ { "descripcion": "X", "cantidad": 1, "valorUnitario": 10 } ]
+}

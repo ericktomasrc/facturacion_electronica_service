@@ -360,6 +360,38 @@ public sealed class RepositorioComprobantes
     }
 
     /// <summary>
+    /// Busca un comprobante por su número. Devuelve null si no existe para
+    /// este emisor.
+    ///
+    /// SE USA PARA VALIDAR LAS NOTAS antes de emitirlas: una nota que apunta
+    /// a un comprobante inexistente la rechaza SUNAT, y para entonces ya
+    /// quemaste un correlativo de la serie de notas. Comprobarlo aquí cuesta
+    /// una consulta y evita ese desperdicio.
+    /// </summary>
+    public async Task<ResumenComprobante?> BuscarPorNumeroAsync(
+        Guid tenantId,
+        string tipoComprobante,
+        string serie,
+        int correlativo,
+        CancellationToken ct = default)
+    {
+        await using var sesion = await _sesiones.AbrirAsync(tenantId, ct);
+
+        var fila = await sesion.Conexion.QuerySingleOrDefaultAsync<ResumenComprobante?>(
+            new CommandDefinition(
+                ConsultaResumen + """
+                 WHERE tipo_comprobante = @tipoComprobante
+                   AND serie = @serie
+                   AND correlativo = @correlativo
+                """,
+                new { tipoComprobante, serie, correlativo },
+                sesion.Transaccion, cancellationToken: ct));
+
+        await sesion.ConfirmarAsync(ct);
+        return fila;
+    }
+
+    /// <summary>
     /// Da de alta una serie si no existe. Pensado para el arranque y las
     /// pruebas; en producción esto lo hace el panel de administración.
     /// </summary>

@@ -1,5 +1,6 @@
 using Facturacion.Persistencia;
 using Facturacion.Worker;
+using Microsoft.Extensions.Logging;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -48,6 +49,22 @@ builder.Services.AddSingleton(new SemaforoPorTenant(limitePorDefecto: 1));
 
 builder.Services.AddSingleton<ProcesadorComprobantes>();
 builder.Services.AddHostedService<ServicioWorker>();
+
+// --- Resúmenes diarios de boletas -----------------------------------------
+//
+// Corre como un servicio aparte del worker de facturas porque su ritmo es
+// completamente distinto: las facturas se procesan en segundos y los
+// resúmenes una vez al día. Mezclarlos obligaría a que el más lento marcara
+// el ritmo del más rápido.
+builder.Services.AddSingleton(new RepositorioResumenes(cadenaOperador));
+builder.Services.AddSingleton<ProcesadorResumenes>();
+
+builder.Services.AddSingleton<IHostedService>(proveedor =>
+    new ServicioResumenes(
+        proveedor.GetRequiredService<ProcesadorResumenes>(),
+        proveedor.GetRequiredService<ILogger<ServicioResumenes>>(),
+        TimeSpan.FromSeconds(
+            builder.Configuration.GetValue("Resumenes:IntervaloSegundos", 60))));
 
 var host = builder.Build();
 host.Run();

@@ -4,14 +4,29 @@ using Dapper;
 namespace Facturacion.Persistencia;
 
 /// <summary>Datos legibles de un certificado, para mostrar en el panel.</summary>
+/// <param name="ComprobantesFirmados">
+/// Cuántos comprobantes se firmaron mientras este certificado estuvo activo.
+/// Determina si se puede eliminar.
+/// </param>
 public record CertificadoInfo(
     Guid Id,
     string Subject,
     string Huella,
     DateTime? ValidoDesde,
     DateTime ValidoHasta,
-    bool Activo)
+    bool Activo,
+    int ComprobantesFirmados)
 {
+    /// <summary>
+    /// Un certificado que nunca firmó nada se puede borrar: típicamente se
+    /// cargó por error y se reemplazó enseguida.
+    ///
+    /// Uno que sí firmó hay que conservarlo. Sin él no se puede verificar la
+    /// firma de esos comprobantes, y esa verificación puede hacer falta años
+    /// después, durante una fiscalización.
+    /// </summary>
+    public bool SePuedeEliminar => ComprobantesFirmados == 0 && !Activo;
+
     public bool EstaVencido => ValidoHasta < DateTime.UtcNow;
 
     public int DiasParaVencer =>
@@ -158,15 +173,31 @@ public sealed class AlmacenCertificados
         var filas = await sesion.Conexion.QueryAsync<CertificadoInfo>(
             new CommandDefinition(
                 """
-                SELECT id           AS "Id",
-                       subject      AS "Subject",
-                       huella       AS "Huella",
-                       valido_desde AS "ValidoDesde",
-                       valido_hasta AS "ValidoHasta",
-                       activo       AS "Activo"
-                  FROM certificados
-                 WHERE tenant_id = @tenantId
-                 ORDER BY creado_en DESC
+                SELECT c.id           AS "Id",
+                       c.subject      AS "Subject",
+                       c.huella       AS "Huella",
+                       c.valido_desde AS "ValidoDesde",
+                       c.valido_hasta AS "ValidoHasta",
+                       c.activo       AS "Activo",
+
+                       -- Comprobantes firmados mientras este certificado
+                       -- estuvo vigente. Se aproxima por la ventana de
+                       -- tiempo: desde que se cargó hasta que se reemplazó.
+                       (SELECT count(*)::int
+                          FROM comprobantes co
+                         WHERE co.tenant_id = c.tenant_id
+                           AND co.estado <> 'BORRADOR'
+                           AND co.creado_en >= c.creado_en
+                           AND (c.activo OR co.creado_en < COALESCE(
+                                 (SELECT min(c2.creado_en) FROM certificados c2
+                                   WHERE c2.tenant_id = c.tenant_id
+                                     AND c2.creado_en > c.creado_en),
+                                 'infinity'::timestamptz)))
+                                                  AS "ComprobantesFirmados"
+
+                  FROM certificados c
+                 WHERE c.tenant_id = @tenantId
+                 ORDER BY c.creado_en DESC
                 """,
                 new { tenantId },
                 sesion.Transaccion, cancellationToken: ct));
@@ -174,6 +205,36 @@ public sealed class AlmacenCertificados
         await sesion.ConfirmarAsync(ct);
 
         return filas.ToList();
+    }
+
+    /// <summary>
+    /// Elimina un certificado, pero SOLO si nunca firmó nada y no es el activo.
+    ///
+    /// Sirve para el caso real de cargar el archivo equivocado y darse cuenta
+    /// enseguida. Un certificado que ya firmó comprobantes se conserva
+    /// siempre: sin él no se puede verificar esas firmas, y esa verificación
+    /// puede hacer falta durante una fiscalización años después.
+    /// </summary>
+    public async Task<bool> EliminarAsync(
+        Guid tenantId, Guid certificadoId, CancellationToken ct = default)
+    {
+        var lista = await ListarAsync(tenantId, ct);
+
+        var certificado = lista.FirstOrDefault(c => c.Id == certificadoId);
+
+        if (certificado is null || !certificado.SePuedeEliminar)
+            return false;
+
+        await using var sesion = await _sesiones.AbrirAsync(tenantId, ct);
+
+        var filas = await sesion.Conexion.ExecuteAsync(new CommandDefinition(
+            "DELETE FROM certificados WHERE id = @certificadoId AND NOT activo",
+            new { certificadoId },
+            sesion.Transaccion, cancellationToken: ct));
+
+        await sesion.ConfirmarAsync(ct);
+
+        return filas > 0;
     }
 
     /// <summary>

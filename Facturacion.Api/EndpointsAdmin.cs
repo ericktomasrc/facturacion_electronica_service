@@ -118,6 +118,25 @@ public static class EndpointsAdmin
             Results.Ok(await certificados.ListarAsync(id, ct)))
             .WithSummary("Lista los certificados de una empresa");
 
+        grupo.MapDelete("/tenants/{id:guid}/certificados/{certificadoId:guid}", async (
+            Guid id, Guid certificadoId,
+            AlmacenCertificados certificados, CancellationToken ct) =>
+        {
+            var eliminado = await certificados.EliminarAsync(id, certificadoId, ct);
+
+            return eliminado
+                ? Results.Ok(new { mensaje = "Certificado eliminado." })
+                : Results.Conflict(new RespuestaError(
+                    "No se puede eliminar este certificado.",
+                    "O está activo, o ya firmó comprobantes. Un certificado " +
+                    "que firmó hay que conservarlo: sin él no se puede " +
+                    "verificar esas firmas durante una fiscalización."));
+        })
+        .WithSummary("Elimina un certificado nunca usado")
+        .WithDescription(
+            "Para el caso de haber cargado el archivo equivocado. Solo " +
+            "funciona si el certificado está inactivo y nunca firmó nada.");
+
         // -------------------------------------------------------------- series
 
         grupo.MapGet("/tenants/{id:guid}/series", async (
@@ -145,6 +164,41 @@ public static class EndpointsAdmin
             "El correlativo inicial normalmente es 0, pero si la empresa migra " +
             "desde otro sistema hay que poner el último número que ya emitió. " +
             "Empezar de nuevo en 1 generaría duplicados que SUNAT rechaza.");
+
+        grupo.MapDelete("/tenants/{id:guid}/series/{serieId:guid}", async (
+            Guid id, Guid serieId, RepositorioAdmin admin, CancellationToken ct) =>
+        {
+            var eliminada = await admin.EliminarSerieAsync(id, serieId, ct);
+
+            return eliminada
+                ? Results.Ok(new { mensaje = "Serie eliminada." })
+                : Results.Conflict(new RespuestaError(
+                    "No se puede eliminar esta serie.",
+                    "Ya tiene comprobantes emitidos. Borrarla dejaría huérfano " +
+                    "el rastro de esa numeración. Desactívala: deja de poder " +
+                    "emitir y el histórico queda intacto."));
+        })
+        .WithSummary("Elimina una serie sin usar")
+        .WithDescription(
+            "Solo funciona si la serie nunca emitió comprobantes. En caso " +
+            "contrario hay que desactivarla.");
+
+        grupo.MapPatch("/tenants/{id:guid}/series/{serieId:guid}", async (
+            Guid id, Guid serieId, CambioEstadoSerie cambio,
+            RepositorioAdmin admin, CancellationToken ct) =>
+        {
+            var cambiada = await admin.CambiarEstadoSerieAsync(
+                id, serieId, cambio.Activo, ct);
+
+            return cambiada
+                ? Results.Ok(new { mensaje = cambio.Activo
+                    ? "Serie reactivada." : "Serie desactivada." })
+                : Results.NotFound(new RespuestaError("No se encontró la serie."));
+        })
+        .WithSummary("Activa o desactiva una serie")
+        .WithDescription(
+            "Una serie desactivada no puede emitir, pero sus comprobantes " +
+            "siguen consultándose y descargándose igual.");
 
         // -------------------------------------------------------------- claves
 
@@ -201,3 +255,5 @@ public record NuevaSerie(
     int CorrelativoInicial = 0);
 
 public record NuevaClave(string Nombre, bool Produccion = false);
+
+public record CambioEstadoSerie(bool Activo);
