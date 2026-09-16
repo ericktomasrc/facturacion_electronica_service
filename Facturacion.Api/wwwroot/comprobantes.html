@@ -93,6 +93,13 @@
   .i-mal { background:var(--mal-fondo); color:var(--mal); }
   .i-tenue { background:var(--sutil); color:var(--tenue); }
 
+
+  .usuario { display:flex; align-items:center; gap:12px; font-size:13.5px;
+             color:var(--tenue); }
+  .usuario .rol { background:var(--sutil); border-radius:var(--radio);
+                  padding:2px 9px; font-size:12px; }
+  .usuario a { color:var(--acento); text-decoration:none; }
+  .usuario a:hover { text-decoration:underline; }
   .paginacion { display:flex; align-items:center; justify-content:space-between;
                 gap:12px; margin-top:14px; font-size:13.5px; color:var(--tenue); }
 
@@ -132,16 +139,14 @@
 <div class="contenedor">
   <header>
     <h1>Facturación electrónica</h1>
-    <div>
-      <input id="clave" type="password" placeholder="Clave de operador" size="21">
-      <button id="entrar" class="principal">Entrar</button>
-    </div>
+    <div id="usuario-actual" class="usuario"></div>
   </header>
 
   <nav>
     <a href="/diagnostico.html">Estado del servicio</a>
     <a href="/admin.html">Empresas</a>
     <a href="/comprobantes.html" class="activo">Comprobantes</a>
+    <a href="/cuenta.html">Mi cuenta</a>
   </nav>
 
   <div class="tarjeta">
@@ -180,7 +185,7 @@
   </div>
 
   <div class="tarjeta" id="resultados">
-    <div class="vacio">Introduce la clave de operador para buscar.</div>
+    <div class="vacio">Cargando…</div>
   </div>
 </div>
 
@@ -189,15 +194,89 @@
 // Visual Studio que recarga la página al guardar, inyecta jQuery y espera
 // encontrarlo ahí.
 const elem = id => document.getElementById(id);
+
+// SE DEFINE AQUÍ, ANTES QUE CUALQUIER FUNCIÓN QUE LA USE.
+//
+// Las constantes declaradas con const no existen hasta que su línea se
+// ejecuta, aunque la función que las llama esté escrita más arriba. Tenerla
+// al final del archivo hacía que la cabecera del usuario fallara con
+// "esc is not defined", y el panel se quedaba en "Cargando...".
 const esc = t => String(t ?? "").replace(/[&<>"']/g,
   c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
 const estado = { pagina: 1, ultima: null };
 
-const claveInput = elem("clave");
-claveInput.value = sessionStorage.getItem("claveOperador") || "";
 
-elem("entrar").onclick = () => { estado.pagina = 1; buscar(); };
+// ---------------------------------------------------------------- sesión
+//
+// La autenticación va por cookie, no por una clave escrita en la página.
+// La cookie es HttpOnly: este JavaScript no puede leerla, el navegador la
+// envía sola. Si algún día se cuela un script malicioso, no podrá robarla.
+
+let usuarioActual = null;
+
+
+// ------------------------------------------------------------------- menú
+//
+// El menú se arma según los permisos del usuario: cada quien ve solo las
+// pantallas que puede usar.
+//
+// OCULTAR NO ES PROTEGER. El servidor comprueba el permiso en cada petición;
+// esto solo evita mostrar opciones que darían un error al pulsarlas.
+
+const PANTALLAS = [
+  { url:"/diagnostico.html", texto:"Estado del servicio", permiso:"diagnostico.ver" },
+  { url:"/admin.html",       texto:"Empresas",            permiso:"empresas.ver" },
+  { url:"/comprobantes.html",texto:"Comprobantes",        permiso:"comprobantes.ver" },
+  { url:"/usuarios.html",    texto:"Usuarios",            permiso:"usuarios.gestionar" },
+  { url:"/cuenta.html",      texto:"Mi cuenta",           permiso:null }
+];
+
+const puede = permiso => usuarioActual?.permisos?.includes(permiso) === true;
+
+function pintarMenu() {
+  const menu = document.querySelector("nav");
+  if (!menu) return;
+
+  const actual = location.pathname;
+
+  menu.innerHTML = PANTALLAS
+    .filter(p => p.permiso === null || puede(p.permiso))
+    .map(p => `<a href="${p.url}" class="${actual === p.url ? "activo" : ""}">
+                 ${esc(p.texto)}</a>`)
+    .join("");
+}
+
+async function cargarUsuario() {
+  const r = await fetch("/admin/yo");
+
+  if (r.status === 401) {
+    location.href = "/login.html";
+    return false;
+  }
+
+  usuarioActual = await r.json();
+
+  const caja = elem("usuario-actual");
+
+  if (caja) {
+    caja.innerHTML =
+      `<span>${esc(usuarioActual.nombre || usuarioActual.correo)}</span>` +
+      `<span class="rol">${esc(usuarioActual.rol)}</span>` +
+      `<a href="#" id="salir">Salir</a>`;
+
+    elem("salir").onclick = async e => {
+      e.preventDefault();
+      await fetch("/admin/sesion", { method: "DELETE" });
+      location.href = "/login.html";
+    };
+  }
+
+  pintarMenu();
+
+  return true;
+}
+
 elem("btn-buscar").onclick = () => { estado.pagina = 1; buscar(); };
 elem("d-cerrar").onclick = () => elem("velo-detalle").classList.remove("visible");
 
@@ -214,7 +293,13 @@ function avisar(titulo, detalle = "", tipo = "") {
 }
 
 async function api(ruta) {
-  const r = await fetch(ruta, { headers: { "X-Admin-Key": claveInput.value } });
+  const r = await fetch(ruta);
+
+  if (r.status === 401) {
+    location.href = "/login.html";
+    throw new Error("Sesión caducada.");
+  }
+
   const cuerpo = await r.json().catch(() => ({}));
 
   if (!r.ok) {
@@ -227,8 +312,6 @@ async function api(ruta) {
 }
 
 async function buscar() {
-  sessionStorage.setItem("claveOperador", claveInput.value);
-
   const parametros = new URLSearchParams();
 
   const texto = elem("f-texto").value.trim();
@@ -354,9 +437,9 @@ async function descargar(id, tipo, boton) {
   boton.disabled = true;
 
   try {
-    const r = await fetch(`/admin/comprobantes/${id}/${tipo}`, {
-      headers: { "X-Admin-Key": claveInput.value }
-    });
+    const r = await fetch(`/admin/comprobantes/${id}/${tipo}`);
+
+    if (r.status === 401) { location.href = "/login.html"; return; }
 
     if (!r.ok) {
       const cuerpo = await r.json().catch(() => ({}));
@@ -425,7 +508,7 @@ async function verDetalle(id) {
   }
 }
 
-if (claveInput.value) buscar();
+cargarUsuario().then(ok => { if (ok) buscar(); });
 </script>
 </body>
 </html>

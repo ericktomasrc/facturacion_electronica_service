@@ -14,7 +14,8 @@ public static class EndpointsWebhooks
     public static void MapearWebhooks(this WebApplication app)
     {
         var grupo = app.MapGroup("/admin/tenants/{id:guid}/webhooks")
-            .AddEndpointFilter<FiltroClaveOperador>()
+            .AddEndpointFilter<AutenticacionPanel>()
+            .AddEndpointFilter(new ExigirPermiso(Permiso.WebhooksGestionar))
             .WithTags("Webhooks");
 
         grupo.MapGet("", async (
@@ -113,7 +114,8 @@ public static class EndpointsWebhooks
             CancellationToken ct) =>
             Results.Ok(await webhooks.HistorialAsync(
                 id, Math.Clamp(limite ?? 50, 1, 200), ct)))
-            .AddEndpointFilter<FiltroClaveOperador>()
+            .AddEndpointFilter<AutenticacionPanel>()
+            .AddEndpointFilter(new ExigirPermiso(Permiso.WebhooksGestionar))
             .WithTags("Webhooks")
             .WithSummary("Historial de entregas");
 
@@ -129,7 +131,7 @@ public static class EndpointsWebhooks
                     "O no existe, o no está agotada. Solo se reintentan las " +
                     "entregas que agotaron sus intentos."));
         })
-        .AddEndpointFilter<FiltroClaveOperador>()
+        .AddEndpointFilter<AutenticacionPanel>()
         .WithTags("Webhooks")
         .WithSummary("Reintenta una entrega agotada")
         .WithDescription(

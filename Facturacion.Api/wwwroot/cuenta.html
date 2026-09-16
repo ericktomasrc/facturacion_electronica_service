@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mi cuenta · Facturación electrónica</title>
+<style>
+  :root {
+    --fondo:#f6f7f9; --panel:#ffffff; --sutil:#f1f3f5;
+    --borde:#e3e6ea; --borde-fuerte:#cfd4da;
+    --texto:#1b1f24; --tenue:#5c6570;
+    --acento:#2563eb; --ok:#15803d; --ok-fondo:#eaf6ee;
+    --aviso:#a16207; --aviso-fondo:#fdf5e3;
+    --mal:#b91c1c; --mal-fondo:#fdeded;
+    --radio:8px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo:#0f1115; --panel:#171a21; --sutil:#1c212b;
+      --borde:#262b36; --borde-fuerte:#3a4152;
+      --texto:#e6e8ec; --tenue:#98a1ae;
+      --acento:#4493f8; --ok:#3fb950; --ok-fondo:#122a18;
+      --aviso:#d29922; --aviso-fondo:#2b2311;
+      --mal:#f85149; --mal-fondo:#2d1516;
+    }
+  }
+
+  * { box-sizing:border-box; }
+  body { margin:0; padding:22px; background:var(--fondo); color:var(--texto);
+         font:15px/1.55 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
+  .contenedor { max-width:720px; margin:0 auto; }
+
+  header { display:flex; align-items:center; justify-content:space-between;
+           gap:16px; margin-bottom:6px; flex-wrap:wrap; }
+  h1 { font-size:19px; margin:0; font-weight:500; }
+
+  nav { display:flex; gap:18px; border-bottom:1px solid var(--borde);
+        margin-bottom:18px; }
+  nav a { color:var(--tenue); text-decoration:none; font-size:14px;
+          padding:0 2px 9px; border-bottom:2px solid transparent;
+          margin-bottom:-1px; }
+  nav a:hover { color:var(--texto); }
+  nav a.activo { color:var(--texto); border-bottom-color:var(--acento); }
+
+  .usuario { display:flex; align-items:center; gap:12px; font-size:13.5px;
+             color:var(--tenue); }
+  .usuario .rol { background:var(--sutil); border-radius:var(--radio);
+                  padding:2px 9px; font-size:12px; }
+  .usuario a { color:var(--acento); text-decoration:none; }
+
+  section { background:var(--panel); border:1px solid var(--borde);
+            border-radius:12px; padding:18px 20px; margin-bottom:14px; }
+  h2 { font-size:14px; margin:0 0 4px; color:var(--tenue);
+       text-transform:uppercase; letter-spacing:.06em; font-weight:600; }
+  .ayuda { color:var(--tenue); font-size:13.5px; margin:0 0 16px; }
+
+  input, button { font:inherit; font-size:14px; color:var(--texto);
+    background:var(--panel); border:1px solid var(--borde);
+    border-radius:var(--radio); padding:8px 12px; }
+  input:focus { outline:none; border-color:var(--acento); }
+  button { cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--borde-fuerte); }
+  button:disabled { opacity:.5; cursor:default; }
+  button.principal { background:var(--acento); border-color:var(--acento);
+                     color:#fff; font-weight:500; }
+  button.peligro { color:var(--mal); }
+
+  label { display:block; font-size:12px; color:var(--tenue); margin-bottom:4px; }
+  .rejilla { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+             gap:11px; margin-bottom:14px; }
+  label input { width:100%; }
+
+  .insignia { font-size:12px; padding:3px 10px; border-radius:var(--radio); }
+  .i-ok { background:var(--ok-fondo); color:var(--ok); }
+  .i-aviso { background:var(--aviso-fondo); color:var(--aviso); }
+
+  .qr { display:flex; gap:22px; align-items:flex-start; flex-wrap:wrap;
+        margin:16px 0; }
+  .qr img { width:180px; height:180px; border:1px solid var(--borde);
+            border-radius:var(--radio); background:#fff; padding:8px; }
+  .secreto-manual { font-family:ui-monospace, Consolas, monospace;
+    font-size:14px; background:var(--sutil); border-radius:var(--radio);
+    padding:10px 12px; word-break:break-all; margin-top:8px; }
+
+  .codigos { background:var(--ok-fondo); border:1px solid var(--ok);
+             border-radius:var(--radio); padding:15px 17px; margin-top:14px; }
+  .codigos ul { list-style:none; margin:12px 0; padding:0;
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+    gap:7px; }
+  .codigos li { font-family:ui-monospace, Consolas, monospace; font-size:14px;
+                color:var(--ok); }
+
+  #avisos { position:fixed; top:18px; right:18px; z-index:60;
+            display:flex; flex-direction:column; gap:8px; max-width:370px; }
+  .flotante { background:var(--panel); border:1px solid var(--borde);
+    border-left:3px solid var(--acento); border-radius:var(--radio);
+    padding:11px 14px; font-size:14px; box-shadow:0 6px 22px rgba(0,0,0,.14); }
+  .flotante.ok { border-left-color:var(--ok); }
+  .flotante.mal { border-left-color:var(--mal); }
+  .flotante .t { font-weight:500; }
+  .flotante .d { color:var(--tenue); font-size:13px; margin-top:2px; }
+
+  /* Campo de contraseña con botón para mostrarla.
+     El input se envuelve para poder colocar el botón encima sin que el
+     texto quede debajo. */
+  .con-ojo { position:relative; }
+  .con-ojo input { padding-right:42px; }
+  .con-ojo button {
+    position:absolute; right:6px; top:50%; transform:translateY(-50%);
+    width:auto; background:none; border:none; padding:6px;
+    cursor:pointer; color:var(--tenue); line-height:0; }
+  .con-ojo button:hover { color:var(--texto); }
+  .con-ojo svg { width:19px; height:19px; stroke:currentColor; fill:none;
+                 stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+</style>
+</head>
+<body>
+
+<div id="avisos"></div>
+
+<div class="contenedor">
+  <header>
+    <h1>Facturación electrónica</h1>
+    <div id="usuario-actual" class="usuario"></div>
+  </header>
+
+  <nav>
+    <a href="/diagnostico.html">Estado del servicio</a>
+    <a href="/admin.html">Empresas</a>
+    <a href="/comprobantes.html">Comprobantes</a>
+    <a href="/cuenta.html" class="activo">Mi cuenta</a>
+  </nav>
+
+  <section>
+    <h2>Verificación en dos pasos</h2>
+    <p class="ayuda">
+      Este panel da acceso a los certificados digitales de todos tus clientes.
+      Con verificación en dos pasos, una contraseña robada ya no basta para
+      entrar.
+    </p>
+
+    <div id="estado-2fa">Cargando…</div>
+  </section>
+
+  <section>
+    <h2>Contraseña</h2>
+    <p class="ayuda">
+      Se pide la actual aunque tengas la sesión abierta: si alguien
+      encontrara tu equipo desbloqueado, no debería poder quedarse con la
+      cuenta.
+    </p>
+
+    <div class="rejilla">
+      <label>Contraseña actual<input id="p-actual" type="password"></label>
+      <label>Nueva<input id="p-nueva" type="password"></label>
+      <label>Repítela<input id="p-repetir" type="password"></label>
+    </div>
+
+    <button id="btn-contrasena">Cambiar contraseña</button>
+  </section>
+</div>
+
+<script>
+const elem = id => document.getElementById(id);
+
+const esc = t => String(t ?? "").replace(/[&<>"']/g,
+  c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+let usuarioActual = null;
+
+function avisar(titulo, detalle = "", tipo = "") {
+  const caja = document.createElement("div");
+  caja.className = "flotante " + tipo;
+  caja.innerHTML = `<div class="t">${esc(titulo)}</div>` +
+                   (detalle ? `<div class="d">${esc(detalle)}</div>` : "");
+  elem("avisos").appendChild(caja);
+  setTimeout(() => caja.remove(), tipo === "mal" ? 8000 : 4000);
+}
+
+async function api(ruta, opciones = {}) {
+  const r = await fetch(ruta, opciones);
+
+  if (r.status === 401) {
+    location.href = "/login.html";
+    throw new Error("Sesión caducada.");
+  }
+
+  const cuerpo = await r.json().catch(() => ({}));
+
+  if (!r.ok) {
+    const error = new Error(cuerpo.error || `Error ${r.status}`);
+    error.detalle = cuerpo.detalle || "";
+    throw error;
+  }
+
+  return cuerpo;
+}
+
+
+// ------------------------------------------------------------------- menú
+//
+// El menú se arma según los permisos del usuario: cada quien ve solo las
+// pantallas que puede usar.
+//
+// OCULTAR NO ES PROTEGER. El servidor comprueba el permiso en cada petición;
+// esto solo evita mostrar opciones que darían un error al pulsarlas.
+
+const PANTALLAS = [
+  { url:"/diagnostico.html", texto:"Estado del servicio", permiso:"diagnostico.ver" },
+  { url:"/admin.html",       texto:"Empresas",            permiso:"empresas.ver" },
+  { url:"/comprobantes.html",texto:"Comprobantes",        permiso:"comprobantes.ver" },
+  { url:"/usuarios.html",    texto:"Usuarios",            permiso:"usuarios.gestionar" },
+  { url:"/cuenta.html",      texto:"Mi cuenta",           permiso:null }
+];
+
+const puede = permiso => usuarioActual?.permisos?.includes(permiso) === true;
+
+function pintarMenu() {
+  const menu = document.querySelector("nav");
+  if (!menu) return;
+
+  const actual = location.pathname;
+
+  menu.innerHTML = PANTALLAS
+    .filter(p => p.permiso === null || puede(p.permiso))
+    .map(p => `<a href="${p.url}" class="${actual === p.url ? "activo" : ""}">
+                 ${esc(p.texto)}</a>`)
+    .join("");
+}
+
+async function cargarUsuario() {
+  const r = await fetch("/admin/yo");
+
+  if (r.status === 401) { location.href = "/login.html"; return false; }
+
+  usuarioActual = await r.json();
+
+  elem("usuario-actual").innerHTML =
+    `<span>${esc(usuarioActual.nombre || usuarioActual.correo)}</span>` +
+    `<span class="rol">${esc(usuarioActual.rol)}</span>` +
+    `<a href="#" id="salir">Salir</a>`;
+
+  elem("salir").onclick = async e => {
+    e.preventDefault();
+    await fetch("/admin/sesion", { method: "DELETE" });
+    location.href = "/login.html";
+  };
+
+  pintarMenu();
+
+  return true;
+}
+
+async function pintarEstado2fa() {
+  const datos = await api("/admin/yo/2fa/codigos");
+
+  if (datos.activo) {
+    elem("estado-2fa").innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+        <span class="insignia i-ok">Activa</span>
+        <span class="ayuda" style="margin:0">
+          Te quedan ${datos.restantes} código${datos.restantes === 1 ? "" : "s"}
+          de recuperación.
+        </span>
+      </div>
+
+      ${datos.restantes <= 2 ? `
+        <div style="background:var(--aviso-fondo);border:1px solid var(--aviso);
+                    border-radius:var(--radio);padding:12px 14px;
+                    margin-bottom:14px;font-size:13.5px;color:var(--aviso)">
+          Te quedan muy pocos códigos de recuperación. Desactiva y vuelve a
+          activar la verificación para generar ocho nuevos.
+        </div>` : ""}
+
+      <div class="rejilla">
+        <label>Contraseña<input id="d-contrasena" type="password"></label>
+      </div>
+      <button class="peligro" id="btn-desactivar">Desactivar verificación</button>`;
+
+    elem("btn-desactivar").onclick = desactivar;
+
+  } else {
+    elem("estado-2fa").innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+        <span class="insignia i-aviso">Sin activar</span>
+      </div>
+      <button class="principal" id="btn-activar">Activar verificación</button>
+      <div id="proceso"></div>`;
+
+    elem("btn-activar").onclick = activar;
+  }
+}
+
+async function activar() {
+  const boton = elem("btn-activar");
+  boton.disabled = true;
+
+  try {
+    const datos = await api("/admin/yo/2fa/iniciar", { method: "POST" });
+
+    elem("proceso").innerHTML = `
+      <div class="qr">
+        <img src="${datos.qr}" alt="Código QR para la aplicación autenticadora">
+        <div style="flex:1;min-width:230px">
+          <p class="ayuda" style="margin-top:0">${esc(datos.instrucciones)}</p>
+          <label style="margin-top:10px">Si no puedes escanear, escribe esto:</label>
+          <div class="secreto-manual">${esc(datos.secreto)}</div>
+        </div>
+      </div>
+
+      <div class="rejilla">
+        <label>Código de seis dígitos
+          <input id="c-codigo" inputmode="numeric" maxlength="6" placeholder="123456">
+        </label>
+      </div>
+
+      <button class="principal" id="btn-confirmar">Confirmar y activar</button>
+
+      <p class="ayuda" style="margin-top:12px;margin-bottom:0">
+        ${esc(datos.aviso)}
+      </p>`;
+
+    elem("btn-confirmar").onclick = confirmar;
+    elem("c-codigo").focus();
+
+  } catch (e) {
+    avisar(e.message, e.detalle, "mal");
+  } finally {
+    boton.disabled = false;
+  }
+}
+
+async function confirmar() {
+  const boton = elem("btn-confirmar");
+  boton.disabled = true;
+
+  try {
+    const r = await api("/admin/yo/2fa/confirmar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ codigo: elem("c-codigo").value.trim() })
+    });
+
+    // Los códigos se muestran fijos, no como aviso flotante: es la única vez
+    // que existen y son la única forma de entrar si se pierde el teléfono.
+    elem("proceso").innerHTML = `
+      <div class="codigos">
+        <strong>Códigos de recuperación</strong>
+        <ul>${r.codigosRecuperacion.map(c => `<li>${esc(c)}</li>`).join("")}</ul>
+        <div class="ayuda" style="margin:0">${esc(r.aviso)}</div>
+        <button class="principal" id="btn-copiar" style="margin-top:12px">
+          Copiar todos
+        </button>
+        <button id="btn-listo" style="margin-top:12px">Ya los guardé</button>
+      </div>`;
+
+    elem("btn-copiar").onclick = async () => {
+      await navigator.clipboard.writeText(r.codigosRecuperacion.join("\n"));
+      avisar("Códigos copiados", "", "ok");
+    };
+
+    elem("btn-listo").onclick = () => pintarEstado2fa();
+
+    avisar("Verificación en dos pasos activada", "", "ok");
+
+  } catch (e) {
+    avisar(e.message, e.detalle, "mal");
+    boton.disabled = false;
+  }
+}
+
+async function desactivar() {
+  const boton = elem("btn-desactivar");
+  boton.disabled = true;
+
+  try {
+    await api("/admin/yo/2fa/desactivar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contrasena: elem("d-contrasena").value })
+    });
+
+    avisar("Verificación desactivada",
+           "Tu cuenta vuelve a depender solo de la contraseña.", "ok");
+
+    await pintarEstado2fa();
+
+  } catch (e) {
+    avisar(e.message, e.detalle, "mal");
+    boton.disabled = false;
+  }
+}
+
+elem("btn-contrasena").onclick = async () => {
+  const nueva = elem("p-nueva").value;
+
+  if (nueva !== elem("p-repetir").value) {
+    avisar("Las dos contraseñas no coinciden", "", "mal");
+    return;
+  }
+
+  const boton = elem("btn-contrasena");
+  boton.disabled = true;
+
+  try {
+    await api("/admin/yo/contrasena", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actual: elem("p-actual").value, nueva })
+    });
+
+    avisar("Contraseña cambiada", "", "ok");
+
+    ["p-actual","p-nueva","p-repetir"].forEach(id => elem(id).value = "");
+
+  } catch (e) {
+    avisar(e.message, e.detalle, "mal");
+  } finally {
+    boton.disabled = false;
+  }
+};
+
+
+// ------------------------------------------------------------------- ojitos
+//
+// Escribir una contraseña a ciegas es la causa más común de "mi contraseña no
+// funciona": se escribió mal y no hay forma de verlo. Poder mostrarla reduce
+// los intentos fallidos, que además bloquean la cuenta tras cinco.
+//
+// El botón dice qué hace mediante aria-label, para quien use lector de
+// pantalla, y cambia de icono según el estado.
+
+const OJO_ABIERTO = `<svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>`;
+
+const OJO_CERRADO = `<svg viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.2A9.8 9.8 0 0112 5c6.5 0 10 7 10 7a17 17 0 01-3.2 4"/><path d="M6.2 6.2A17 17 0 002 12s3.5 7 10 7c1.6 0 3-.4 4.2-1"/><path d="M9.9 9.9a3 3 0 004.2 4.2"/></svg>`;
+
+function ponerOjo(idCampo) {
+  const campo = elem(idCampo);
+  if (!campo || campo.dataset.conOjo) return;
+
+  campo.dataset.conOjo = "1";
+
+  const envoltura = document.createElement("span");
+  envoltura.className = "con-ojo";
+
+  campo.parentNode.insertBefore(envoltura, campo);
+  envoltura.appendChild(campo);
+
+  const boton = document.createElement("button");
+  boton.type = "button";
+  boton.innerHTML = OJO_ABIERTO;
+  boton.setAttribute("aria-label", "Mostrar contraseña");
+  boton.title = "Mostrar contraseña";
+
+  boton.onclick = () => {
+    const visible = campo.type === "text";
+
+    campo.type = visible ? "password" : "text";
+    boton.innerHTML = visible ? OJO_ABIERTO : OJO_CERRADO;
+
+    const texto = visible ? "Mostrar contraseña" : "Ocultar contraseña";
+    boton.setAttribute("aria-label", texto);
+    boton.title = texto;
+
+    // Devolver el foco al campo: si no, seguir escribiendo obliga a hacer
+    // clic otra vez.
+    campo.focus();
+  };
+
+  envoltura.appendChild(boton);
+}
+
+// Se aplica a todos los campos de contraseña de la página.
+document.querySelectorAll('input[type=password]').forEach(c => {
+  if (c.id) ponerOjo(c.id);
+});
+
+cargarUsuario().then(ok => { if (ok) pintarEstado2fa(); });
+</script>
+</body>
+</html>

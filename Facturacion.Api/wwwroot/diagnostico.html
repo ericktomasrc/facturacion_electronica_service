@@ -38,6 +38,13 @@
   nav a.activo { color:var(--texto); border-bottom-color:var(--acento); }
 
   .controles { display:flex; gap:8px; align-items:center; }
+  .usuario { display:flex; align-items:center; gap:12px; font-size:13.5px;
+             color:var(--tenue); }
+  .usuario .rol { background:var(--sutil); border-radius:var(--radio);
+                  padding:2px 9px; font-size:12px; }
+  .usuario a { color:var(--acento); text-decoration:none; }
+  .usuario a:hover { text-decoration:underline; }
+
   input, button { background:var(--panel); border:1px solid var(--borde);
     color:var(--texto); padding:7px 11px; border-radius:7px; font:inherit;
     font-size:14px; }
@@ -107,20 +114,22 @@
 <div class="contenedor">
   <header>
     <h1>Facturación electrónica</h1>
-    <div class="controles">
-      <input id="clave" type="password" placeholder="Clave de operador" size="22">
-      <button id="actualizar" class="principal">Actualizar</button>
-    </div>
+    <div id="usuario-actual" class="usuario"></div>
   </header>
 
   <nav>
     <a href="/diagnostico.html" class="activo">Estado del servicio</a>
     <a href="/admin.html">Empresas</a>
     <a href="/comprobantes.html">Comprobantes</a>
+    <a href="/cuenta.html">Mi cuenta</a>
   </nav>
 
+  <div style="margin-bottom:14px">
+    <button id="actualizar" class="principal">Actualizar</button>
+  </div>
+
   <div id="contenido">
-    <section class="vacio">Introduce la clave de operador y pulsa Actualizar.</section>
+    <section class="vacio">Cargando…</section>
   </div>
 
   <footer id="pie"></footer>
@@ -133,11 +142,93 @@
 // parece del panel y no lo es.
 const elem = id => document.getElementById(id);
 
-const claveInput = elem("clave");
-claveInput.value = sessionStorage.getItem("claveOperador") || "";
+// SE DEFINE AQUÍ, ANTES QUE CUALQUIER FUNCIÓN QUE LA USE.
+//
+// Las constantes declaradas con const no existen hasta que su línea se
+// ejecuta, aunque la función que las llama esté escrita más arriba. Tenerla
+// al final del archivo hacía que la cabecera del usuario fallara con
+// "esc is not defined", y el panel se quedaba en "Cargando...".
+const esc = t => String(t ?? "").replace(/[&<>"']/g,
+  c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+
+// ---------------------------------------------------------------- sesión
+//
+// La autenticación va por cookie, no por una clave escrita en la página.
+//
+// La cookie es HttpOnly, así que este JavaScript NO puede leerla: el
+// navegador la envía sola en cada petición. Si algún día se cuela un script
+// malicioso, no podrá robar la sesión.
+//
+// Cuando el servidor responde 401, la sesión caducó y se vuelve al ingreso.
+
+let usuarioActual = null;
+
+
+// ------------------------------------------------------------------- menú
+//
+// El menú se arma según los permisos del usuario: cada quien ve solo las
+// pantallas que puede usar.
+//
+// OCULTAR NO ES PROTEGER. El servidor comprueba el permiso en cada petición;
+// esto solo evita mostrar opciones que darían un error al pulsarlas.
+
+const PANTALLAS = [
+  { url:"/diagnostico.html", texto:"Estado del servicio", permiso:"diagnostico.ver" },
+  { url:"/admin.html",       texto:"Empresas",            permiso:"empresas.ver" },
+  { url:"/comprobantes.html",texto:"Comprobantes",        permiso:"comprobantes.ver" },
+  { url:"/usuarios.html",    texto:"Usuarios",            permiso:"usuarios.gestionar" },
+  { url:"/cuenta.html",      texto:"Mi cuenta",           permiso:null }
+];
+
+const puede = permiso => usuarioActual?.permisos?.includes(permiso) === true;
+
+function pintarMenu() {
+  const menu = document.querySelector("nav");
+  if (!menu) return;
+
+  const actual = location.pathname;
+
+  menu.innerHTML = PANTALLAS
+    .filter(p => p.permiso === null || puede(p.permiso))
+    .map(p => `<a href="${p.url}" class="${actual === p.url ? "activo" : ""}">
+                 ${esc(p.texto)}</a>`)
+    .join("");
+}
+
+async function cargarUsuario() {
+  const r = await fetch("/admin/yo");
+
+  if (r.status === 401) {
+    location.href = "/login.html";
+    return false;
+  }
+
+  usuarioActual = await r.json();
+
+  const caja = elem("usuario-actual");
+
+  if (caja) {
+    caja.innerHTML =
+      `<span>${esc(usuarioActual.nombre || usuarioActual.correo)}</span>` +
+      `<span class="rol">${esc(usuarioActual.rol)}</span>` +
+      `<a href="#" id="salir">Salir</a>`;
+
+    elem("salir").onclick = async e => {
+      e.preventDefault();
+      await fetch("/admin/sesion", { method: "DELETE" });
+      location.href = "/login.html";
+    };
+  }
+
+  pintarMenu();
+
+  return true;
+}
+
+const esAdministrador = () => usuarioActual?.esAdministrador === true;
 
 elem("actualizar").onclick = cargar;
-claveInput.onkeydown = e => { if (e.key === "Enter") cargar(); };
 
 function avisar(titulo, detalle = "", tipo = "") {
   const caja = document.createElement("div");
@@ -153,19 +244,14 @@ function avisar(titulo, detalle = "", tipo = "") {
 }
 
 async function cargar() {
-  sessionStorage.setItem("claveOperador", claveInput.value);
-
   const boton = elem("actualizar");
   boton.disabled = true;
 
   try {
-    const respuesta = await fetch("/admin/salud", {
-      headers: { "X-Admin-Key": claveInput.value }
-    });
+    const respuesta = await fetch("/admin/salud");
 
     if (respuesta.status === 401) {
-      elem("contenido").innerHTML =
-        `<section class="mal">Clave de operador no válida.</section>`;
+      location.href = "/login.html";
       return;
     }
 
@@ -246,7 +332,9 @@ function pintar(d) {
             <td>${escapar(c.estado)}</td>
             <td>${c.intentosFallidos}</td>
             <td class="recorte" title="${escapar(c.ultimoMensaje ?? "")}">${escapar(c.ultimoMensaje ?? "—")}</td>
-            <td><button class="mini" data-reprocesar="${c.id}">Reprocesar</button></td>
+            <td>${puede("comprobantes.reprocesar")
+                  ? `<button class="mini" data-reprocesar="${c.id}">Reprocesar</button>`
+                  : ""}</td>
           </tr>`).join("")}
       </table>`));
   }
@@ -262,8 +350,7 @@ async function reprocesar(id, boton) {
 
   try {
     const respuesta = await fetch(`/admin/comprobantes/${id}/reprocesar`, {
-      method: "POST",
-      headers: { "X-Admin-Key": claveInput.value }
+      method: "POST"
     });
 
     const cuerpo = await respuesta.json().catch(() => ({}));
@@ -298,7 +385,7 @@ const textoNivel = nivel => ({
 const escapar = t => String(t ?? "").replace(/[&<>"']/g,
   c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
-if (claveInput.value) cargar();
+cargarUsuario().then(ok => { if (ok) cargar(); });
 </script>
 </body>
 </html>

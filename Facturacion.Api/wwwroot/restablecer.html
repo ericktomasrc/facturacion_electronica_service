@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nueva contraseña · Facturación electrónica</title>
+<style>
+  :root {
+    --fondo:#f6f7f9; --panel:#ffffff; --borde:#e3e6ea;
+    --texto:#1b1f24; --tenue:#5c6570;
+    --acento:#2563eb; --mal:#b91c1c; --mal-fondo:#fdeded;
+    --ok:#15803d; --ok-fondo:#eaf6ee;
+    --radio:8px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo:#0f1115; --panel:#171a21; --borde:#262b36;
+      --texto:#e6e8ec; --tenue:#98a1ae;
+      --acento:#4493f8; --mal:#f85149; --mal-fondo:#2d1516;
+      --ok:#3fb950; --ok-fondo:#122a18;
+    }
+  }
+
+  * { box-sizing:border-box; }
+
+  body { margin:0; min-height:100vh; background:var(--fondo); color:var(--texto);
+         font:15px/1.55 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+         display:flex; align-items:center; justify-content:center; padding:20px; }
+
+  .caja { background:var(--panel); border:1px solid var(--borde);
+          border-radius:14px; padding:30px 32px; width:100%; max-width:390px; }
+
+  h1 { font-size:19px; margin:0 0 4px; font-weight:500; }
+  .sub { color:var(--tenue); font-size:13.5px; margin-bottom:24px; }
+
+  label { display:block; font-size:12.5px; color:var(--tenue); margin:0 0 5px; }
+
+  input { width:100%; font:inherit; font-size:14.5px; color:var(--texto);
+          background:var(--panel); border:1px solid var(--borde);
+          border-radius:var(--radio); padding:9px 12px; margin-bottom:16px; }
+  input:focus { outline:none; border-color:var(--acento); }
+
+  button { width:100%; font:inherit; font-size:14.5px; font-weight:500;
+           background:var(--acento); border:1px solid var(--acento);
+           color:#fff; border-radius:var(--radio); padding:10px; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:default; }
+
+  .mensaje { border-radius:var(--radio); padding:11px 13px; font-size:13.5px;
+             margin-bottom:18px; display:none; }
+  .mensaje.visible { display:block; }
+  .mensaje.mal { background:var(--mal-fondo); color:var(--mal); }
+  .mensaje.ok { background:var(--ok-fondo); color:var(--ok); }
+
+  .nota { color:var(--tenue); font-size:12.5px; margin-top:18px;
+          border-top:1px solid var(--borde); padding-top:14px; }
+
+  a { color:var(--acento); text-decoration:none; }
+
+  /* Campo de contraseña con botón para mostrarla.
+     El input se envuelve para poder colocar el botón encima sin que el
+     texto quede debajo. */
+  .con-ojo { position:relative; }
+  .con-ojo input { padding-right:42px; }
+  .con-ojo button {
+    position:absolute; right:6px; top:50%; transform:translateY(-50%);
+    width:auto; background:none; border:none; padding:6px;
+    cursor:pointer; color:var(--tenue); line-height:0; }
+  .con-ojo button:hover { color:var(--texto); }
+  .con-ojo svg { width:19px; height:19px; stroke:currentColor; fill:none;
+                 stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+</style>
+</head>
+<body>
+
+<div class="caja">
+  <h1>Nueva contraseña</h1>
+  <div class="sub" id="subtitulo">Elige una contraseña para tu cuenta</div>
+
+  <div class="mensaje" id="mensaje"></div>
+
+  <form id="formulario">
+    <label for="nueva">Contraseña nueva</label>
+    <input id="nueva" type="password" autocomplete="new-password" required>
+
+    <label for="repetir">Repítela</label>
+    <input id="repetir" type="password" autocomplete="new-password" required>
+
+    <button type="submit" id="boton">Guardar</button>
+  </form>
+
+  <div class="nota" id="nota">
+    Usa al menos 10 caracteres. Una frase que recuerdes va mejor que algo
+    corto y complicado.
+  </div>
+</div>
+
+<script>
+const elem = id => document.getElementById(id);
+
+// El enlace llega por correo con el identificador en la dirección. Es de un
+// solo uso y caduca en una hora.
+const token = new URLSearchParams(location.search).get("token");
+
+function mostrar(texto, tipo = "mal") {
+  const caja = elem("mensaje");
+  caja.textContent = texto;
+  caja.className = "mensaje visible " + tipo;
+}
+
+if (!token) {
+  mostrar("Falta el enlace. Ábrelo desde el correo que recibiste.");
+  elem("formulario").style.display = "none";
+}
+
+elem("formulario").onsubmit = async e => {
+  e.preventDefault();
+
+  const nueva = elem("nueva").value;
+
+  if (nueva !== elem("repetir").value) {
+    mostrar("Las dos contraseñas no coinciden.");
+    return;
+  }
+
+  if (nueva.length < 10) {
+    mostrar("Debe tener al menos 10 caracteres.");
+    return;
+  }
+
+  const boton = elem("boton");
+  boton.disabled = true;
+
+  try {
+    const r = await fetch("/admin/sesion/restablecer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, nueva })
+    });
+
+    const cuerpo = await r.json().catch(() => ({}));
+
+    if (!r.ok) {
+      mostrar(cuerpo.detalle || cuerpo.error || "No se pudo cambiar.");
+      boton.disabled = false;
+      return;
+    }
+
+    mostrar(cuerpo.mensaje, "ok");
+
+    elem("formulario").style.display = "none";
+    elem("subtitulo").textContent = "Listo";
+
+    elem("nota").innerHTML = '<a href="/login.html">Ir al ingreso</a>';
+
+    // Se lleva al ingreso solo, para que no se quede mirando una pantalla
+    // sin saber qué hacer.
+    setTimeout(() => location.href = "/login.html", 3000);
+
+  } catch (error) {
+    mostrar("No se pudo contactar el servicio: " + error.message);
+    boton.disabled = false;
+  }
+};
+
+
+// ------------------------------------------------------------------- ojitos
+//
+// Escribir una contraseña a ciegas es la causa más común de "mi contraseña no
+// funciona": se escribió mal y no hay forma de verlo. Poder mostrarla reduce
+// los intentos fallidos, que además bloquean la cuenta tras cinco.
+//
+// El botón dice qué hace mediante aria-label, para quien use lector de
+// pantalla, y cambia de icono según el estado.
+
+const OJO_ABIERTO = `<svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>`;
+
+const OJO_CERRADO = `<svg viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.2A9.8 9.8 0 0112 5c6.5 0 10 7 10 7a17 17 0 01-3.2 4"/><path d="M6.2 6.2A17 17 0 002 12s3.5 7 10 7c1.6 0 3-.4 4.2-1"/><path d="M9.9 9.9a3 3 0 004.2 4.2"/></svg>`;
+
+function ponerOjo(idCampo) {
+  const campo = elem(idCampo);
+  if (!campo || campo.dataset.conOjo) return;
+
+  campo.dataset.conOjo = "1";
+
+  const envoltura = document.createElement("span");
+  envoltura.className = "con-ojo";
+
+  campo.parentNode.insertBefore(envoltura, campo);
+  envoltura.appendChild(campo);
+
+  const boton = document.createElement("button");
+  boton.type = "button";
+  boton.innerHTML = OJO_ABIERTO;
+  boton.setAttribute("aria-label", "Mostrar contraseña");
+  boton.title = "Mostrar contraseña";
+
+  boton.onclick = () => {
+    const visible = campo.type === "text";
+
+    campo.type = visible ? "password" : "text";
+    boton.innerHTML = visible ? OJO_ABIERTO : OJO_CERRADO;
+
+    const texto = visible ? "Mostrar contraseña" : "Ocultar contraseña";
+    boton.setAttribute("aria-label", texto);
+    boton.title = texto;
+
+    // Devolver el foco al campo: si no, seguir escribiendo obliga a hacer
+    // clic otra vez.
+    campo.focus();
+  };
+
+  envoltura.appendChild(boton);
+}
+
+// Se aplica a todos los campos de contraseña de la página.
+document.querySelectorAll('input[type=password]').forEach(c => {
+  if (c.id) ponerOjo(c.id);
+});
+
+elem("nueva").focus();
+</script>
+</body>
+</html>

@@ -49,7 +49,7 @@ public sealed class ProveedorCredenciales
         await using var conexion = new NpgsqlConnection(_cadenaOperador);
         await conexion.OpenAsync(ct);
 
-        var fila = await conexion.QuerySingleOrDefaultAsync<FilaCredenciales?>(
+        var fila = await conexion.QuerySingleOrDefaultAsync<FilaCredenciales>(
             new CommandDefinition(
                 """
                 SELECT ruc               AS "Ruc",
@@ -67,22 +67,22 @@ public sealed class ProveedorCredenciales
                 "El emisor no existe. Puede haberse eliminado mientras un " +
                 "comprobante suyo esperaba en la cola.");
 
-        if (!fila.Value.Activo)
+        if (!fila.Activo)
             throw new InvalidOperationException(
                 "El emisor está desactivado. Sus comprobantes no deben enviarse " +
                 "hasta que se reactive.");
 
-        if (fila.Value.Ambiente != "produccion")
-            return ConfiguracionSunat.Beta(fila.Value.Ruc);
+        if (fila.Ambiente != "produccion")
+            return ConfiguracionSunat.Beta(fila.Ruc);
 
         // --- Producción ---
 
-        if (string.IsNullOrWhiteSpace(fila.Value.UsuarioSol))
+        if (string.IsNullOrWhiteSpace(fila.UsuarioSol))
             throw new InvalidOperationException(
                 "El emisor está en producción pero no tiene usuario SOL " +
                 "configurado. Cárgalo desde el panel antes de emitir.");
 
-        if (fila.Value.ClaveCifrada is null || fila.Value.ClaveCifrada.Length == 0)
+        if (fila.ClaveCifrada is null || fila.ClaveCifrada.Length == 0)
             throw new InvalidOperationException(
                 "El emisor está en producción pero no tiene clave SOL guardada. " +
                 "Cárgala desde el panel antes de emitir.");
@@ -91,7 +91,7 @@ public sealed class ProveedorCredenciales
 
         try
         {
-            clave = _protector.DesprotegerTexto(fila.Value.ClaveCifrada);
+            clave = _protector.DesprotegerTexto(fila.ClaveCifrada);
         }
         catch (Exception ex)
         {
@@ -105,7 +105,7 @@ public sealed class ProveedorCredenciales
         }
 
         return ConfiguracionSunat.Produccion(
-            fila.Value.Ruc, fila.Value.UsuarioSol!, clave);
+            fila.Ruc, fila.UsuarioSol!, clave);
     }
 
     /// <summary>
@@ -126,7 +126,7 @@ public sealed class ProveedorCredenciales
         await using var conexion = new NpgsqlConnection(_cadenaOperador);
         await conexion.OpenAsync(ct);
 
-        var datos = await conexion.QuerySingleOrDefaultAsync<FilaRevision?>(
+        var datos = await conexion.QuerySingleOrDefaultAsync<FilaRevision>(
             new CommandDefinition(
                 """
                 SELECT t.ruc               AS "Ruc",
@@ -158,7 +158,7 @@ public sealed class ProveedorCredenciales
         if (datos is null)
             return new RevisionProduccion(false, ["El emisor no existe."], []);
 
-        var d = datos.Value;
+        var d = datos;
         var faltantes = new List<string>();
         var advertencias = new List<string>();
 
@@ -222,11 +222,16 @@ public sealed class ProveedorCredenciales
         return new RevisionProduccion(faltantes.Count == 0, faltantes, advertencias);
     }
 
-    private record struct FilaCredenciales(
+    // SON CLASES, NO record struct.
+    //
+    // Dapper no materializa bien un struct envuelto en Nullable: devuelve
+    // null aunque la fila exista, y sin lanzar ningún error. El fallo aparece
+    // como "no se encontró" cuando en realidad sí estaba.
+    private sealed record FilaCredenciales(
         string Ruc, string Ambiente, string? UsuarioSol,
         byte[]? ClaveCifrada, bool Activo);
 
-    private record struct FilaRevision(
+    private sealed record FilaRevision(
         string Ruc, string RazonSocial, string? UsuarioSol, bool TieneClave,
         string Direccion, string Ubigeo, int Series, int Claves,
         string? CertificadoSubject, DateTime? CertificadoVence);

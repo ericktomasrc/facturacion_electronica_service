@@ -143,6 +143,13 @@
   .tenue { color:var(--tenue); }
   .vacio { color:var(--tenue); font-size:14px; padding:14px 0; }
 
+
+  .usuario { display:flex; align-items:center; gap:12px; font-size:13.5px;
+             color:var(--tenue); }
+  .usuario .rol { background:var(--sutil); border-radius:var(--radio);
+                  padding:2px 9px; font-size:12px; }
+  .usuario a { color:var(--acento); text-decoration:none; }
+  .usuario a:hover { text-decoration:underline; }
   .rejilla { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
              gap:11px; margin:14px 0; }
   label { display:block; font-size:12px; color:var(--tenue); margin-bottom:4px; }
@@ -247,21 +254,19 @@
 <div class="contenedor">
   <header>
     <h1>Facturación electrónica</h1>
-    <div>
-      <input id="clave" type="password" placeholder="Clave de operador" size="21">
-      <button id="entrar" class="principal">Entrar</button>
-    </div>
+    <div id="usuario-actual" class="usuario"></div>
   </header>
 
   <nav>
     <a href="/diagnostico.html">Estado del servicio</a>
     <a href="/admin.html" class="activo">Empresas</a>
     <a href="/comprobantes.html">Comprobantes</a>
+    <a href="/cuenta.html">Mi cuenta</a>
   </nav>
 
   <div id="raiz">
-    <div class="tarjeta" style="padding:18px 20px" class="vacio">
-      <span class="vacio">Introduce la clave de operador para continuar.</span>
+    <div class="tarjeta" style="padding:18px 20px">
+      <span class="vacio">Cargando…</span>
     </div>
   </div>
 </div>
@@ -300,11 +305,81 @@ const estado = {
   filtro: { series:"", claves:"", certificado:"", webhooks:"" }
 };
 
-const claveInput = elem("clave");
-claveInput.value = sessionStorage.getItem("claveOperador") || "";
 
-elem("entrar").onclick = iniciar;
-claveInput.onkeydown = e => { if (e.key === "Enter") iniciar(); };
+// ---------------------------------------------------------------- sesión
+//
+// La autenticación va por cookie, no por una clave escrita en la página.
+//
+// La cookie es HttpOnly, así que este JavaScript NO puede leerla: el
+// navegador la envía sola en cada petición. Si algún día se cuela un script
+// malicioso, no podrá robar la sesión.
+
+let usuarioActual = null;
+
+
+// ------------------------------------------------------------------- menú
+//
+// El menú se arma según los permisos del usuario: cada quien ve solo las
+// pantallas que puede usar.
+//
+// OCULTAR NO ES PROTEGER. El servidor comprueba el permiso en cada petición;
+// esto solo evita mostrar opciones que darían un error al pulsarlas.
+
+const PANTALLAS = [
+  { url:"/diagnostico.html", texto:"Estado del servicio", permiso:"diagnostico.ver" },
+  { url:"/admin.html",       texto:"Empresas",            permiso:"empresas.ver" },
+  { url:"/comprobantes.html",texto:"Comprobantes",        permiso:"comprobantes.ver" },
+  { url:"/usuarios.html",    texto:"Usuarios",            permiso:"usuarios.gestionar" },
+  { url:"/cuenta.html",      texto:"Mi cuenta",           permiso:null }
+];
+
+const puede = permiso => usuarioActual?.permisos?.includes(permiso) === true;
+
+function pintarMenu() {
+  const menu = document.querySelector("nav");
+  if (!menu) return;
+
+  const actual = location.pathname;
+
+  menu.innerHTML = PANTALLAS
+    .filter(p => p.permiso === null || puede(p.permiso))
+    .map(p => `<a href="${p.url}" class="${actual === p.url ? "activo" : ""}">
+                 ${esc(p.texto)}</a>`)
+    .join("");
+}
+
+async function cargarUsuario() {
+  const r = await fetch("/admin/yo");
+
+  if (r.status === 401) {
+    location.href = "/login.html";
+    return false;
+  }
+
+  usuarioActual = await r.json();
+
+  const caja = elem("usuario-actual");
+
+  if (caja) {
+    caja.innerHTML =
+      `<span>${esc(usuarioActual.nombre || usuarioActual.correo)}</span>` +
+      `<span class="rol">${esc(usuarioActual.rol)}</span>` +
+      `<a href="#" id="salir">Salir</a>`;
+
+    elem("salir").onclick = async e => {
+      e.preventDefault();
+      await fetch("/admin/sesion", { method: "DELETE" });
+      location.href = "/login.html";
+    };
+  }
+
+  pintarMenu();
+
+  return true;
+}
+
+const esAdministrador = () => usuarioActual?.esAdministrador === true;
+
 
 // ------------------------------------------------------------------ avisos
 
@@ -341,10 +416,12 @@ function confirmar(titulo, texto, textoBoton = "Confirmar") {
 // --------------------------------------------------------------------- api
 
 async function api(ruta, opciones = {}) {
-  const r = await fetch(ruta, {
-    ...opciones,
-    headers: { "X-Admin-Key": claveInput.value, ...(opciones.headers || {}) }
-  });
+  const r = await fetch(ruta, opciones);
+
+  if (r.status === 401) {
+    location.href = "/login.html";
+    throw new Error("Sesión caducada.");
+  }
 
   const cuerpo = await r.json().catch(() => ({}));
 
@@ -358,8 +435,6 @@ async function api(ruta, opciones = {}) {
 }
 
 async function iniciar() {
-  sessionStorage.setItem("claveOperador", claveInput.value);
-
   try {
     estado.empresas = await api("/admin/tenants");
     pintar();
@@ -390,7 +465,8 @@ function pintar() {
         <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
         <input id="buscar" placeholder="Buscar por RUC o nombre" value="${esc(estado.filtroEmpresas)}">
       </div>
-      <button class="principal" id="btn-nueva">Nueva empresa</button>
+      ${puede("empresas.editar")
+        ? `<button class="principal" id="btn-nueva">Nueva empresa</button>` : ""}
     </div>
 
     <div class="maestro-detalle">
@@ -428,7 +504,7 @@ function pintar() {
     nuevo.setSelectionRange(posicion, posicion);
   };
 
-  elem("btn-nueva").onclick = abrirNueva;
+  if (elem("btn-nueva")) elem("btn-nueva").onclick = abrirNueva;
 
   document.querySelectorAll("[data-empresa]").forEach(fila =>
     fila.onclick = () => seleccionar(fila.dataset.empresa));
@@ -479,8 +555,9 @@ function pintarDetalle() {
       <div style="display:flex;gap:8px;align-items:center">
         <span class="insignia ${t.activo ? "i-ok" : "i-tenue"}">
           ${t.activo ? "Activa" : "Inactiva"}</span>
-        <button class="mini" id="btn-alternar">
-          ${t.activo ? "Desactivar" : "Activar"}</button>
+        ${puede("empresas.editar")
+          ? `<button class="mini" id="btn-alternar">
+               ${t.activo ? "Desactivar" : "Activar"}</button>` : ""}
       </div>
     </div>
 
@@ -504,14 +581,14 @@ function pintarDetalle() {
     </div>
 
     <div class="pestanas">
-      ${["series","claves","certificado","webhooks","produccion"].map(p => `
+      ${pestanasVisibles().map(p => `
         <button class="pestana ${estado.pestana === p ? "activa" : ""}"
                 data-pestana="${p}">${nombrePestana(p)}</button>`).join("")}
     </div>
 
     <div id="cuerpo-pestana"><div class="vacio">Cargando…</div></div>`;
 
-  elem("btn-alternar").onclick = alternarActiva;
+  if (elem("btn-alternar")) elem("btn-alternar").onclick = alternarActiva;
 
   document.querySelectorAll("[data-pestana]").forEach(boton =>
     boton.onclick = () => {
@@ -520,6 +597,22 @@ function pintarDetalle() {
     });
 
   cargarPestana();
+}
+
+/// Las pestañas del detalle también dependen de los permisos.
+///
+/// Sin esto, alguien de soporte vería la pestaña de certificados y al pulsar
+/// recibiría un 403. Es mejor no mostrar lo que no se puede usar.
+function pestanasVisibles() {
+  const todas = [
+    { clave:"series",      permiso:"empresas.ver" },
+    { clave:"claves",      permiso:"claves.gestionar" },
+    { clave:"certificado", permiso:"certificados.gestionar" },
+    { clave:"webhooks",    permiso:"webhooks.gestionar" },
+    { clave:"produccion",  permiso:"produccion.cambiar" }
+  ];
+
+  return todas.filter(p => puede(p.permiso)).map(p => p.clave);
 }
 
 const nombrePestana = p => ({
@@ -1276,7 +1369,12 @@ const nombreTipo = t =>
 
 function seleccionar(id) {
   estado.seleccionada = estado.empresas.find(e => e.id === id);
-  estado.pestana = "series";
+
+  // La primera pestaña que el usuario pueda ver, no siempre "series":
+  // alguien sin empresas.ver no debería aterrizar en una pantalla vacía.
+  const visibles = pestanasVisibles();
+  estado.pestana = visibles[0] ?? "series";
+
   pintar();
 }
 
@@ -1623,7 +1721,7 @@ async function subirCertificado() {
   }
 }
 
-if (claveInput.value) iniciar();
+cargarUsuario().then(ok => { if (ok) iniciar(); });
 </script>
 </body>
 </html>

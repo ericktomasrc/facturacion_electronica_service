@@ -13,8 +13,13 @@ public static class EndpointsAdmin
 {
     public static void MapearAdministracion(this WebApplication app)
     {
+        // CADA ACCIÓN EXIGE SU PROPIO PERMISO, no un rol entero.
+        //
+        // Quien da de alta clientes no necesita cargar certificados, y quien
+        // atiende llamadas no necesita crear empresas. Repartirlo así permite
+        // dar a cada persona exactamente lo que usa.
         var grupo = app.MapGroup("/admin")
-            .AddEndpointFilter<FiltroClaveOperador>()
+            .AddEndpointFilter<AutenticacionPanel>()
             .WithTags("Administración");
 
         // ------------------------------------------------------------ empresas
@@ -22,7 +27,8 @@ public static class EndpointsAdmin
         grupo.MapGet("/tenants", async (
             RepositorioAdmin admin, CancellationToken ct) =>
             Results.Ok(await admin.ListarTenantsAsync(ct)))
-            .WithSummary("Lista las empresas");
+            .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasVer))
+        .WithSummary("Lista las empresas");
 
         grupo.MapPost("/tenants", async (
             NuevoTenant nuevo, RepositorioAdmin admin, CancellationToken ct) =>
@@ -48,6 +54,7 @@ public static class EndpointsAdmin
                     "Cada empresa se da de alta una sola vez."));
             }
         })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasEditar))
         .WithSummary("Da de alta una empresa");
 
         grupo.MapPatch("/tenants/{id:guid}", async (
@@ -61,6 +68,7 @@ public static class EndpointsAdmin
                 ? Results.Ok(new { mensaje = "Empresa actualizada." })
                 : Results.NotFound(new RespuestaError("No se encontró la empresa."));
         })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasEditar))
         .WithSummary("Activa, desactiva o ajusta la concurrencia");
 
         // ------------------------------------------------- credenciales SOL
@@ -92,6 +100,7 @@ public static class EndpointsAdmin
                 return Results.BadRequest(new RespuestaError("Datos inválidos.", ex.Message));
             }
         })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.ProduccionCambiar))
         .WithSummary("Guarda las credenciales SOL del contribuyente")
         .WithDescription(
             "La clave se cifra igual que el certificado.\n\n" +
@@ -102,6 +111,7 @@ public static class EndpointsAdmin
         grupo.MapGet("/tenants/{id:guid}/revision-produccion", async (
             Guid id, ProveedorCredenciales credenciales, CancellationToken ct) =>
             Results.Ok(await credenciales.RevisarAsync(id, ct)))
+            .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasVer))
             .WithSummary("Comprueba si la empresa puede pasar a producción")
             .WithDescription(
                 "Revisa certificado, credenciales SOL y series. Pasar a " +
@@ -143,6 +153,7 @@ public static class EndpointsAdmin
                 })
                 : Results.NotFound(new RespuestaError("No se encontró la empresa."));
         })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.ProduccionCambiar))
         .WithSummary("Cambia el ambiente de la empresa")
         .WithDescription(
             "Pasar a producción exige superar la revisión previa. Volver a " +
@@ -190,6 +201,7 @@ public static class EndpointsAdmin
             }
         })
         .DisableAntiforgery()
+        .AddEndpointFilter(new ExigirPermiso(Permiso.CertificadosGestionar))
         .WithSummary("Carga el certificado digital de una empresa")
         .WithDescription(
             "El archivo .pfx se cifra antes de guardarse. Solo se descifra en " +
@@ -201,6 +213,7 @@ public static class EndpointsAdmin
         grupo.MapGet("/tenants/{id:guid}/certificados", async (
             Guid id, AlmacenCertificados certificados, CancellationToken ct) =>
             Results.Ok(await certificados.ListarAsync(id, ct)))
+            .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasVer))
             .WithSummary("Lista los certificados de una empresa");
 
         grupo.MapDelete("/tenants/{id:guid}/certificados/{certificadoId:guid}", async (
@@ -217,6 +230,7 @@ public static class EndpointsAdmin
                     "que firmó hay que conservarlo: sin él no se puede " +
                     "verificar esas firmas durante una fiscalización."));
         })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.CertificadosGestionar))
         .WithSummary("Elimina un certificado nunca usado")
         .WithDescription(
             "Para el caso de haber cargado el archivo equivocado. Solo " +
@@ -227,6 +241,7 @@ public static class EndpointsAdmin
         grupo.MapGet("/tenants/{id:guid}/series", async (
             Guid id, RepositorioAdmin admin, CancellationToken ct) =>
             Results.Ok(await admin.ListarSeriesAsync(id, ct)))
+            .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasVer))
             .WithSummary("Lista las series de una empresa");
 
         grupo.MapPost("/tenants/{id:guid}/series", async (
@@ -244,6 +259,7 @@ public static class EndpointsAdmin
 
             return Results.Ok(new { id = serieId, mensaje = "Serie dada de alta." });
         })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasEditar))
         .WithSummary("Da de alta una serie")
         .WithDescription(
             "El correlativo inicial normalmente es 0, pero si la empresa migra " +
@@ -263,6 +279,7 @@ public static class EndpointsAdmin
                     "el rastro de esa numeración. Desactívala: deja de poder " +
                     "emitir y el histórico queda intacto."));
         })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasEditar))
         .WithSummary("Elimina una serie sin usar")
         .WithDescription(
             "Solo funciona si la serie nunca emitió comprobantes. En caso " +
@@ -280,6 +297,7 @@ public static class EndpointsAdmin
                     ? "Serie reactivada." : "Serie desactivada." })
                 : Results.NotFound(new RespuestaError("No se encontró la serie."));
         })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasEditar))
         .WithSummary("Activa o desactiva una serie")
         .WithDescription(
             "Una serie desactivada no puede emitir, pero sus comprobantes " +
@@ -290,6 +308,7 @@ public static class EndpointsAdmin
         grupo.MapGet("/tenants/{id:guid}/claves", async (
             Guid id, RepositorioAdmin admin, CancellationToken ct) =>
             Results.Ok(await admin.ListarClavesAsync(id, ct)))
+            .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasVer))
             .WithSummary("Lista las claves de acceso de una empresa");
 
         grupo.MapPost("/tenants/{id:guid}/claves", async (
@@ -309,6 +328,7 @@ public static class EndpointsAdmin
                     "emitir otra."
             });
         })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.ClavesGestionar))
         .WithSummary("Emite una clave de acceso")
         .WithDescription(
             "Devuelve el secreto en claro UNA sola vez. Después ya no se puede " +
@@ -324,6 +344,7 @@ public static class EndpointsAdmin
                 : Results.NotFound(new RespuestaError(
                     "No se encontró la clave, o ya estaba revocada."));
         })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.ClavesGestionar))
         .WithSummary("Revoca una clave")
         .WithDescription(
             "La clave se desactiva, no se borra. Borrarla dejaría sin rastro " +

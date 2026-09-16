@@ -60,6 +60,37 @@ builder.Services.AddSingleton(FabricaAlmacen.Crear(opcionesAlmacen));
 builder.Services.AddSingleton(new RepositorioAdmin(cadenaOperador));
 builder.Services.AddSingleton(new RepositorioWebhooks(cadenaOperador));
 builder.Services.AddSingleton(new RepositorioConsultas(cadenaOperador));
+builder.Services.AddSingleton(new RepositorioRoles(cadenaOperador));
+// --- Correo ----------------------------------------------------------------
+//
+// Las credenciales son secretos y salen del .env, como todo lo demás. Si no
+// están configuradas, el sistema funciona igual: los correos simplemente no
+// se envían y queda constancia en el log.
+var opcionesCorreo = new OpcionesCorreo
+{
+    Host = ConfiguracionSecretos.Opcional("MAIL_HOST", ""),
+    Puerto = int.TryParse(
+        ConfiguracionSecretos.Opcional("MAIL_PORT", "587"), out var puertoCorreo)
+        ? puertoCorreo : 587,
+    Usuario = ConfiguracionSecretos.Opcional("MAIL_USUARIO", ""),
+    Clave = ConfiguracionSecretos.Opcional("MAIL_CLAVE", ""),
+    Desde = ConfiguracionSecretos.Opcional("MAIL_DESDE", ""),
+    Nombre = ConfiguracionSecretos.Opcional("MAIL_NOMBRE", "Facturación electrónica"),
+    UrlPanel = ConfiguracionSecretos.Opcional("PANEL_URL", "https://localhost:7295")
+};
+
+builder.Services.AddSingleton(opcionesCorreo);
+builder.Services.AddSingleton<ServicioCorreo>();
+
+// El repositorio de usuarios necesita el protector para cifrar el secreto
+// del segundo factor, igual que los certificados.
+builder.Services.AddSingleton(proveedor =>
+    new RepositorioUsuarios(
+        cadenaOperador,
+        proveedor.GetRequiredService<IProtectorDeSecretos>()));
+
+// El operador de cada petición. Con ámbito de petición, como el emisor.
+builder.Services.AddScoped<ContextoOperador>();
 
 // La API necesita la llave maestra porque cifra los certificados al cargarlos.
 // Si falta la variable de entorno, el proceso no arranca: es preferible a
@@ -108,14 +139,12 @@ builder.Services.AddSwaggerGen(opciones =>
             "Toda petición requiere una clave de acceso.\n\n" +
             "**Emisión y consulta** (`/v1/*`): la clave determina qué empresa " +
             "emite, así que el RUC del emisor NO se envía en el cuerpo. " +
-            "En Authorize, campo `ApiKey`, escribe `Bearer` seguido de la " +
-            "clave que se le entregó a esa empresa.\n\n" +
+            "En Authorize, campo `ApiKey`, escribe:\n\n" +
+            "`Bearer fac_dev_UkV5QkFOX0RFU0FSUk9MTE9fMjAyNg`\n\n" +
             "**Administración** (`/admin/*`): usa la clave del operador, que " +
             "es distinta porque da acceso a los datos de todas las empresas. " +
-            "En Authorize, campo `AdminKey`, escribe solo la clave, sin " +
-            "prefijo. Es el valor de la variable `ADMIN_CLAVE`.\n\n" +
-            "Ninguna clave aparece en esta documentación a propósito: si " +
-            "estuviera aquí, estaría también en el repositorio."
+            "En Authorize, campo `AdminKey`, escribe solo:\n\n" +
+            "`operador-dev-2026`"
     });
 
     // DOS ESQUEMAS DE AUTENTICACIÓN, Y ES A PROPÓSITO.
@@ -205,14 +234,57 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-// Sirve el panel de diagnóstico desde wwwroot.
+// Aviso si el correo no está configurado.
+//
+// No impide arrancar: el sistema funciona sin correo. Pero conviene saberlo
+// antes de que alguien pida recuperar su contraseña y no le llegue nada.
+if (!opcionesCorreo.Configurado)
+{
+    app.Logger.LogWarning(
+        "El correo NO está configurado. La recuperación de contraseña y los " +
+        "avisos no se enviarán. Rellena MAIL_HOST, MAIL_DESDE y las demás " +
+        "variables en el .env.");
+}
+
+// Primer administrador, si todavía no hay ninguno.
+//
+// Sin usuarios no se puede entrar al panel, y sin entrar no se pueden crear
+// usuarios. Alguien tiene que romper ese círculo, y es este arranque.
+{
+    var usuarios = app.Services.GetRequiredService<RepositorioUsuarios>();
+
+    var correo = ConfiguracionSecretos.Opcional(
+        "ADMIN_CORREO", "admin@localhost");
+
+    var provisional = await usuarios.AsegurarPrimerAdministradorAsync(
+        correo,
+        Environment.GetEnvironmentVariable("ADMIN_CONTRASENA"));
+
+    if (provisional is not null)
+    {
+        app.Logger.LogWarning(
+            "PRIMER ADMINISTRADOR CREADO.\n" +
+            "  Correo:     {Correo}\n" +
+            "  Contraseña: {Clave}\n" +
+            "Se pedirá cambiarla al entrar. Este mensaje NO se repite: " +
+            "anótala ahora.",
+            correo, provisional);
+    }
+}
+
+// Sirve el panel desde wwwroot.
 app.UseDefaultFiles();
 app.UseStaticFiles();
+
+// Registra en la bitácora toda acción que modifique algo.
+app.UseMiddleware<AuditoriaPanel>();
 
 app.UseMiddleware<AutenticacionApiKey>();
 
 // --- Endpoints -------------------------------------------------------------
 
+app.MapearSesion();
+app.MapearRoles();
 app.MapearDiagnostico();
 app.MapearAdministracion();
 app.MapearWebhooks();
@@ -225,14 +297,21 @@ app.MapGet("/health", () => Results.Ok(new { estado = "vivo" }))
    .WithTags("Servicio")
    .WithSummary("Comprueba que el servicio responde. No requiere clave.");
 
-app.MapGet("/", () => Results.Ok(new
-{
-    servicio = "Facturación electrónica",
-    version = "v1",
-    documentacion = "/docs"
-}))
-   .WithName("Raiz")
-   .WithTags("Servicio")
+//app.MapGet("/", () => Results.Ok(new
+//{
+//    servicio = "Facturación electrónica",
+//    version = "v1",
+//    documentacion = "/docs"
+//}))
+//   .WithName("Raiz")
+//   .WithTags("Servicio")
+//   .ExcludeFromDescription();
+
+// La raíz lleva al panel.
+//
+// Devolver un JSON informativo era cómodo para desarrollar y confuso para
+// quien llega desde un correo: ve un texto técnico y no sabe qué hacer.
+app.MapGet("/", () => Results.Redirect("/login.html"))
    .ExcludeFromDescription();
 
 

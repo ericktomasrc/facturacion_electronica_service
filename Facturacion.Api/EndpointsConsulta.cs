@@ -29,7 +29,8 @@ public static class EndpointsConsulta
     public static void MapearConsultas(this WebApplication app)
     {
         var grupo = app.MapGroup("/admin/comprobantes")
-            .AddEndpointFilter<FiltroClaveOperador>()
+            .AddEndpointFilter<AutenticacionPanel>()
+            .AddEndpointFilter(new ExigirPermiso(Permiso.ComprobantesVer))
             .WithTags("Consulta de comprobantes");
 
         grupo.MapGet("", async (
