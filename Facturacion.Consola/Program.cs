@@ -1,257 +1,248 @@
-// Prueba del canal REST de guías de remisión.
+// ===========================================================================
+// CICLO COMPLETO DE UNA GUÍA DE REMISIÓN
 //
-// Los tres bytes son basura a propósito: si el error habla del ZIP, es que
-// el token, la autenticación y el envío funcionaron. Es lo único que se
-// puede comprobar hasta que exista el generador de XML.
+// Junta por primera vez las cinco piezas: modelo, generador, firma,
+// compresión y envío por REST con OAuth2.
 //
-// El RUC termina en 5 porque lo exige el simulador, no SUNAT.
+// Si el simulador devuelve un ticket y luego una respuesta, el camino queda
+// validado de punta a punta.
+//
+// NOTA SOBRE EL AMBIENTE: esto NO es SUNAT. Es un simulador de la comunidad
+// que imita su API, porque SUNAT no publica un beta de guías tan accesible
+// como el de facturas. Sirve para comprobar que el XML, la firma y el flujo
+// funcionan; la verificación real llega con el primer cliente que tenga
+// credenciales de producción.
+// ===========================================================================
 
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using System.Xml;
 using Facturacion.Cpe;
 
-var config = ConfiguracionGre.Beta("20601234565");
+// El último dígito debe ser 5: lo exige el simulador, no SUNAT.
+const string Ruc = "20601234565";
 
-using var cliente = new ClienteGre(config);
-
-var resultado = await cliente.EnviarAsync(
-    "20601234565-09-T001-1.zip", new byte[] { 1, 2, 3 });
-
-Console.WriteLine($"Exitoso : {resultado.Exitoso}");
-Console.WriteLine($"HTTP    : {resultado.CodigoHttp}");
-Console.WriteLine($"Mensaje : {resultado.Mensaje}");
+const string RutaCertificado = "certificado.pfx";
+const string ClaveCertificado = "123456";
 
 
+// ---------------------------------------------------------------- la guía
+
+var guia = new GuiaRemision
+{
+    Serie = "T001",
+    Correlativo = 1,
+
+    FechaEmision = DateTime.Today,
+
+    // El traslado empieza mañana. No puede ser anterior a la emisión: la
+    // guía se emite ANTES de mover los bienes.
+    FechaTraslado = DateTime.Today.AddDays(1),
+
+    Remitente = new Emisor
+    {
+        Ruc = Ruc,
+        RazonSocial = "MI EMPRESA SAC"
+    },
+
+    Destinatario = new Receptor
+    {
+        TipoDocumento = "6",
+        NumeroDocumento = "20512345678",
+        RazonSocial = "FERRETERIA EL CLAVO SAC"
+    },
+
+    MotivoTraslado = CatalogosGre.MotivoTraslado.Venta,
+
+    // Privado: lo lleva la propia empresa, así que hay que declarar el
+    // vehículo y el conductor. En transporte público se declararía al
+    // transportista y él tendría que emitir su propia guía tipo 31.
+    ModalidadTraslado = CatalogosGre.ModalidadTraslado.Privado,
+
+    PesoBruto = 250.5m,
+    NumeroBultos = 12,
+
+    // Los ubigeos son del INEI y SUNAT los valida: uno inventado rechaza
+    // la guía entera.
+    PuntoPartida = new DireccionTraslado("150101", "AV. ARGENTINA 1234 - LIMA"),
+    PuntoLlegada = new DireccionTraslado("150132", "AV. TUPAC AMARU 456 - COMAS"),
+
+    Vehiculo = new Vehiculo("ABC123"),
+
+    Conductor = new Conductor(
+        TipoDocumento: "1",
+        NumeroDocumento: "45678912",
+        Nombres: "JUAN CARLOS",
+        Apellidos: "PEREZ LOPEZ",
+        Licencia: "Q45678912"),
+
+    Bienes =
+    [
+        new BienTrasladado("CEMENTO PORTLAND TIPO I BOLSA 42.5KG", 100, "BG"),
+        new BienTrasladado("FIERRO CORRUGADO 1/2 X 9M", 50, "NIU")
+    ],
+
+    // La factura que origina el traslado.
+    DocumentosRelacionados =
+    [
+        new DocumentoRelacionadoGre("01", "F001-00000053", RucEmisor: Ruc)
+    ]
+};
 
 
+// ------------------------------------------------- 1. revisar antes de nada
+
+Console.WriteLine("GUÍA DE REMISIÓN — CICLO COMPLETO");
+Console.WriteLine(new string('=', 60));
+Console.WriteLine($"Número: {guia.Numero}   Archivo: {guia.NombreArchivo}");
+Console.WriteLine();
+
+var problemas = guia.Revisar();
+
+if (problemas.Count > 0)
+{
+    Console.WriteLine("La guía tiene problemas que SUNAT rechazaría:");
+
+    foreach (var p in problemas)
+        Console.WriteLine("  - " + p);
+
+    return;
+}
+
+Console.WriteLine("1. Revisión previa: sin problemas");
 
 
-//using System.Diagnostics;
-//using Facturacion.Cpe;
-//using Facturacion.Persistencia;
+// ------------------------------------------------------- 2. generar el XML
 
-//// ---------------------------------------------------------------------------
-//// Prueba el repositorio de comprobantes, con foco en lo que de verdad importa:
-////
-////   1. Que 50 emisiones SIMULTÁNEAS no produzcan correlativos duplicados
-////      ni saltados.
-////   2. Que la idempotencia evite duplicados por reintentos.
-////   3. Que la bitácora registre cada cambio de estado.
-////
-//// El primer punto es la razón de ser de este paso. Un duplicado de correlativo
-//// no es un bug: es un problema tributario.
-//// ---------------------------------------------------------------------------
+var xml = GeneradorGuiaXml.Generar(guia);
 
-//// La contraseña sale del entorno, no del código.
-////
-//// Es un programa de pruebas, pero la regla vale igual: una contraseña
-//// escrita aquí queda en el historial de Git para siempre.
-//ConfiguracionSecretos.CargarArchivoEnv();
+Console.WriteLine($"2. XML generado ({xml.ToString().Length} caracteres)");
 
-//string CadenaConexion = ConfiguracionSecretos.CadenaPostgres(
-//    "facturacion_app", "FACTURACION_APP_PASSWORD",
-//    "las pruebas contra la base desde la consola");
 
-//const string RucEmisor = "20601234567";
+// ------------------------------------------------------------- 3. firmar
 
-//var sesiones = new FabricaSesiones(CadenaConexion);
-//var repositorio = new RepositorioComprobantes(sesiones);
+if (!File.Exists(RutaCertificado))
+{
+    Console.WriteLine();
+    Console.WriteLine($"No se encontró {RutaCertificado}.");
+    Console.WriteLine("Cópialo a la carpeta del proyecto de consola.");
+    return;
+}
 
-//// --- Resolver el tenant ----------------------------------------------------
+X509Certificate2 certificado;
 
-//Guid tenantId;
+try
+{
+    // EphemeralKeySet primero: evita que Windows intente escribir la llave
+    // en el almacén del usuario, que es donde fallaba de forma intermitente.
+    certificado = new X509Certificate2(
+        RutaCertificado, ClaveCertificado,
+        X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable);
+}
+catch (Exception ex)
+{
+    Console.WriteLine();
+    Console.WriteLine("No se pudo abrir el certificado: " + ex.Message);
+    return;
+}
 
-//await using (var catalogo = await sesiones.AbrirCatalogoAsync())
-//{
-//    var comando = new Npgsql.NpgsqlCommand(
-//        "SELECT id FROM tenants WHERE ruc = @ruc", catalogo);
+var firmado = FirmadorXml.Firmar(xml, certificado);
 
-//    comando.Parameters.AddWithValue("ruc", RucEmisor);
+Console.WriteLine($"3. Firmado. Verifica: {FirmadorXml.VerificarFirma(firmado)}");
 
-//    var resultado = await comando.ExecuteScalarAsync();
 
-//    if (resultado is null)
-//    {
-//        Console.WriteLine("No se encontró el tenant. ¿Corriste las migraciones?");
-//        return;
-//    }
+// ---------------------------------------------------------- 4. comprimir
 
-//    tenantId = (Guid)resultado;
-//}
+// UTF-8 SIN BOM, y esto importa.
+//
+// Los tres bytes de marca al inicio del archivo invalidan la firma, porque
+// no formaban parte de lo que se firmó. Ya nos costó tiempo descubrirlo con
+// las facturas.
+var sinBom = new UTF8Encoding(false);
 
-//Console.WriteLine($"Tenant: {tenantId}");
-//Console.WriteLine();
+using var memoria = new MemoryStream();
 
-//// --- Dar de alta la serie --------------------------------------------------
+using (var escritor = new XmlTextWriter(memoria, sinBom))
+{
+    firmado.Save(escritor);
+}
 
-//await repositorio.AsegurarSerieAsync(tenantId, TipoComprobante.Factura, "F001");
+var bytesXml = memoria.ToArray();
 
-//// ===========================================================================
-//// PRUEBA 1: 50 emisiones simultáneas
-//// ===========================================================================
+var zip = EmpaquetadorZip.Comprimir(guia.NombreArchivo, bytesXml);
 
-//Console.WriteLine(new string('=', 60));
-//Console.WriteLine("PRUEBA 1: 50 emisiones simultáneas");
-//Console.WriteLine(new string('=', 60));
+Console.WriteLine($"4. Comprimido ({zip.Length} bytes)");
 
-//const int Simultaneas = 50;
+// Se guarda para poder inspeccionarlo si SUNAT rechaza algo.
+File.WriteAllBytes($"{guia.NombreArchivo}.xml", bytesXml);
+Console.WriteLine($"   XML guardado en {guia.NombreArchivo}.xml");
 
-//var cronometro = Stopwatch.StartNew();
 
-//var tareas = Enumerable.Range(1, Simultaneas).Select(async i =>
-//{
-//    try
-//    {
-//        return await repositorio.CrearAsync(tenantId, NuevaFactura($"ITEM-{i:D3}"));
-//    }
-//    catch (Exception ex)
-//    {
-//        Console.WriteLine($"  Falló la emisión {i}: {ex.Message}");
-//        return null;
-//    }
-//});
+// -------------------------------------------------------------- 5. enviar
 
-//var resultados = (await Task.WhenAll(tareas))
-//    .Where(r => r is not null)
-//    .Select(r => r!)
-//    .ToList();
+using var cliente = new ClienteGre(ConfiguracionGre.Beta(Ruc));
 
-//cronometro.Stop();
+var envio = await cliente.EnviarAsync($"{guia.NombreArchivo}.zip", zip);
 
-//Console.WriteLine($"Emitidas      : {resultados.Count} de {Simultaneas}");
-//Console.WriteLine($"Duración      : {cronometro.ElapsedMilliseconds} ms");
+Console.WriteLine();
+Console.WriteLine("5. Envío");
+Console.WriteLine($"   Exitoso : {envio.Exitoso}");
+Console.WriteLine($"   HTTP    : {envio.CodigoHttp}");
+Console.WriteLine($"   Ticket  : {envio.Ticket ?? "(ninguno)"}");
+Console.WriteLine($"   Mensaje : {envio.Mensaje}");
 
-//var correlativos = resultados.Select(r => r.Correlativo).OrderBy(c => c).ToList();
+if (!envio.Exitoso) return;
 
-//var duplicados = correlativos
-//    .GroupBy(c => c)
-//    .Where(g => g.Count() > 1)
-//    .Select(g => g.Key)
-//    .ToList();
 
-//var rangoEsperado = correlativos.Count == 0
-//    ? 0
-//    : correlativos[^1] - correlativos[0] + 1;
+// --------------------------------------------------- 6. consultar el ticket
 
-//var huecos = rangoEsperado - correlativos.Count;
+// El envío devuelve un ticket, no una respuesta.
+//
+// Y aquí está la regla que distingue a las guías: LA CONSTANCIA ACEPTADA
+// DEBE EXISTIR ANTES DE QUE EL VEHÍCULO SALGA. Por eso se consulta cada
+// pocos segundos y no cada minuto como los resúmenes: el camión espera.
 
-//Console.WriteLine($"Rango         : {correlativos.FirstOrDefault()} a {correlativos.LastOrDefault()}");
+Console.WriteLine();
+Console.WriteLine("6. Consultando el ticket");
 
-//Console.ForegroundColor = duplicados.Count == 0 ? ConsoleColor.Green : ConsoleColor.Red;
-//Console.WriteLine(duplicados.Count == 0
-//    ? "Duplicados    : ninguno"
-//    : $"DUPLICADOS    : {string.Join(", ", duplicados)}");
-//Console.ResetColor();
+for (var intento = 1; intento <= 10; intento++)
+{
+    await Task.Delay(3000);
 
-//Console.ForegroundColor = huecos == 0 ? ConsoleColor.Green : ConsoleColor.Yellow;
-//Console.WriteLine(huecos == 0
-//    ? "Huecos        : ninguno"
-//    : $"Huecos        : {huecos} (correlativos quemados por fallos)");
-//Console.ResetColor();
+    var estado = await cliente.ConsultarAsync(envio.Ticket!);
 
-//// ===========================================================================
-//// PRUEBA 2: idempotencia
-//// ===========================================================================
+    Console.WriteLine($"   Intento {intento}: {estado.Descripcion}");
 
-//Console.WriteLine();
-//Console.WriteLine(new string('=', 60));
-//Console.WriteLine("PRUEBA 2: idempotencia");
-//Console.WriteLine(new string('=', 60));
+    if (!estado.Terminado) continue;
 
-//var clave = $"prueba-{Guid.NewGuid()}";
+    Console.WriteLine();
+    Console.WriteLine($"   Aceptada : {estado.Aceptado}");
+    Console.WriteLine($"   Código   : {estado.CodigoRespuesta}");
 
-//var primera = await repositorio.CrearAsync(
-//    tenantId, NuevaFactura("IDEMPOTENTE"), idempotencyKey: clave);
+    foreach (var obs in estado.Observaciones)
+        Console.WriteLine($"   Observación: {obs}");
+    // El código 99 no explica nada. El motivo está en el CDR.
+    if (estado.CdrZip is not null)
+    {
+        File.WriteAllBytes($"R-{guia.NombreArchivo}.zip", estado.CdrZip);
 
-//Console.WriteLine($"Primera vez   : {primera.NumeroCompleto}  (nueva: {!primera.YaExistia})");
+        var (nombre, contenido) = EmpaquetadorZip.ExtraerPrimerXml(estado.CdrZip);
 
-//// Mismo envío otra vez, como si el cliente hubiera reintentado tras un timeout.
-//var segunda = await repositorio.CrearAsync(
-//    tenantId, NuevaFactura("IDEMPOTENTE"), idempotencyKey: clave);
+        Console.WriteLine();
+        Console.WriteLine("--- CDR ---");
+        Console.WriteLine(Encoding.UTF8.GetString(contenido));
+        Console.WriteLine();
+        Console.WriteLine("--- Respuesta cruda ---");
+        Console.WriteLine(estado.RespuestaCruda);
+    }
+    else
+    {
+        Console.WriteLine("   (sin CDR: el motivo debería venir en la respuesta)");
+    }
 
-//Console.WriteLine($"Reintento     : {segunda.NumeroCompleto}  (nueva: {!segunda.YaExistia})");
+    return;
+}
 
-//var mismoComprobante = primera.Id == segunda.Id;
-
-//Console.ForegroundColor = mismoComprobante ? ConsoleColor.Green : ConsoleColor.Red;
-//Console.WriteLine(mismoComprobante
-//    ? "El reintento devolvió el mismo comprobante. Sin duplicado."
-//    : "PROBLEMA: el reintento creó un comprobante nuevo.");
-//Console.ResetColor();
-
-//// ===========================================================================
-//// PRUEBA 3: bitácora
-//// ===========================================================================
-
-//Console.WriteLine();
-//Console.WriteLine(new string('=', 60));
-//Console.WriteLine("PRUEBA 3: bitácora de estados");
-//Console.WriteLine(new string('=', 60));
-
-//var seguimiento = resultados.First();
-
-//await repositorio.RegistrarCambioAsync(tenantId, seguimiento.Id,
-//    new CambioEstado(EstadoCpe.Firmado, Mensaje: "XML firmado."));
-
-//await repositorio.RegistrarCambioAsync(tenantId, seguimiento.Id,
-//    new CambioEstado(EstadoCpe.Enviado, Mensaje: "Enviado a SUNAT.",
-//        DuracionMs: 2840));
-
-//await repositorio.RegistrarCambioAsync(tenantId, seguimiento.Id,
-//    new CambioEstado(EstadoCpe.Aceptado,
-//        CodigoSunat: "0",
-//        Mensaje: "La Factura ha sido aceptada",
-//        DuracionMs: 120));
-
-//Console.WriteLine($"Comprobante   : {seguimiento.NumeroCompleto}");
-//Console.WriteLine();
-
-//foreach (var intento in await repositorio.HistorialAsync(tenantId, seguimiento.Id))
-//{
-//    var duracion = intento.DuracionMs is null ? "" : $"  ({intento.DuracionMs} ms)";
-
-//    Console.WriteLine(
-//        $"  {intento.IntentoNro}. {intento.EstadoAnterior ?? "—"} → " +
-//        $"{intento.EstadoNuevo}{duracion}");
-//    Console.WriteLine($"     {intento.Mensaje}");
-//}
-
-//// --- Estado final ----------------------------------------------------------
-
-//Console.WriteLine();
-//Console.WriteLine("Últimos comprobantes:");
-
-//foreach (var r in await repositorio.ListarAsync(tenantId, limite: 5))
-//    Console.WriteLine($"  {r.NumeroCompleto}  {r.Estado,-28}  {r.ImporteTotal:N2} {r.Moneda}");
-
-//// ---------------------------------------------------------------------------
-
-//static Factura NuevaFactura(string descripcion) => new()
-//{
-//    Serie = "F001",
-//    // Sin correlativo: lo asigna la base.
-//    FechaEmision = DateTime.Now,
-//    Emisor = new Emisor
-//    {
-//        Ruc = RucEmisor,
-//        RazonSocial = "MI EMPRESA SAC",
-//        Direccion = "AV. EJEMPLO 123",
-//        Distrito = "LIMA",
-//        Provincia = "LIMA",
-//        Departamento = "LIMA"
-//    },
-//    Receptor = new Receptor
-//    {
-//        TipoDocumento = TipoDocIdentidad.Ruc,
-//        NumeroDocumento = "20512345678",
-//        RazonSocial = "CLIENTE DE PRUEBA SAC"
-//    },
-//    Lineas =
-//    [
-//        new LineaComprobante
-//        {
-//            Numero = 1,
-//            Descripcion = descripcion,
-//            Cantidad = 2,
-//            ValorUnitario = 50.00m
-//        }
-//    ]
-//};
+Console.WriteLine();
+Console.WriteLine("   SUNAT no terminó de procesar en 30 segundos.");
+Console.WriteLine("   El ticket sigue vivo: se puede consultar más tarde.");

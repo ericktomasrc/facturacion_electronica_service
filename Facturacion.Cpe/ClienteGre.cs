@@ -80,6 +80,13 @@ public record EnvioGre(
     int CodigoHttp = 0);
 
 /// <summary>Resultado de consultar un ticket de guía.</summary>
+/// <param name="RespuestaCruda">
+/// El JSON tal como llegó.
+///
+/// SE CONSERVA A PROPÓSITO. Cuando SUNAT rechaza con un código genérico como
+/// el 99 y no adjunta CDR, el motivo real está aquí y en ningún otro sitio.
+/// Descartarlo obliga a volver a enviar solo para ver qué pasó.
+/// </param>
 public record EstadoGre(
     bool Terminado,
     bool Aceptado,
@@ -87,7 +94,8 @@ public record EstadoGre(
     string Descripcion,
     byte[]? CdrZip,
     IReadOnlyList<string> Observaciones,
-    bool EsReintentable = false);
+    bool EsReintentable = false,
+    string? RespuestaCruda = null);
 
 /// <summary>
 /// Cliente de la API REST de guías de remisión.
@@ -364,7 +372,7 @@ public sealed class ClienteGre : IDisposable
             if (datos is null)
                 return new EstadoGre(false, false, null,
                     $"Respuesta ilegible: {Recortar(texto)}", null, [],
-                    EsReintentable: true);
+                    EsReintentable: true, RespuestaCruda: texto);
 
             // SUNAT usa códigos de estado propios para el proceso:
             //   "06" en proceso, "05" procesado, "98"/"99" con error.
@@ -372,7 +380,8 @@ public sealed class ClienteGre : IDisposable
             if (datos.CodRespuesta is null or "" or "98")
             {
                 return new EstadoGre(false, false, datos.CodRespuesta,
-                    "SUNAT sigue procesando la guía.", null, []);
+                    "SUNAT sigue procesando la guía.", null, [],
+                    RespuestaCruda: texto);
             }
 
             var aceptado = datos.CodRespuesta == "0";
@@ -387,13 +396,27 @@ public sealed class ClienteGre : IDisposable
 
             var observaciones = datos.Observaciones ?? [];
 
+            // Cuando el rechazo no trae CDR ni mensaje, se arma una
+            // descripción con lo que haya llegado. Es preferible un texto
+            // feo con la verdad que uno limpio que no dice nada.
+            var descripcion = datos.Mensaje ?? datos.DesRespuesta;
+
+            if (string.IsNullOrWhiteSpace(descripcion))
+            {
+                descripcion = aceptado
+                    ? "Aceptada"
+                    : $"Rechazada con código {datos.CodRespuesta}. " +
+                      $"Respuesta: {Recortar(texto)}";
+            }
+
             return new EstadoGre(
                 Terminado: true,
                 Aceptado: aceptado,
                 CodigoRespuesta: datos.CodRespuesta,
-                Descripcion: datos.Mensaje ?? (aceptado ? "Aceptada" : "Rechazada"),
+                Descripcion: descripcion,
                 CdrZip: cdr,
-                Observaciones: observaciones);
+                Observaciones: observaciones,
+                RespuestaCruda: texto);
         }
         catch (TaskCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -460,11 +483,19 @@ public sealed class ClienteGre : IDisposable
     private sealed record RespuestaEnvio(
         [property: JsonPropertyName("numTicket")] string? NumTicket);
 
+    /// <summary>
+    /// La respuesta del ticket.
+    ///
+    /// Se declaran más campos de los que la documentación menciona porque el
+    /// motivo del rechazo aparece en unos u otros según el caso: a veces en
+    /// "mensaje", a veces dentro de "error", a veces solo en el CDR.
+    /// </summary>
     private sealed record RespuestaTicket(
         [property: JsonPropertyName("codRespuesta")] string? CodRespuesta,
         [property: JsonPropertyName("arcCdr")] string? ArcCdr,
         [property: JsonPropertyName("indCdrGenerado")] string? IndCdrGenerado,
         [property: JsonPropertyName("mensaje")] string? Mensaje,
+        [property: JsonPropertyName("desRespuesta")] string? DesRespuesta,
         [property: JsonPropertyName("error")] JsonElement? Error,
         [property: JsonPropertyName("observaciones")] string[]? Observaciones);
 }
