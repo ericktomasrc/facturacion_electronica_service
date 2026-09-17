@@ -39,6 +39,45 @@ public record ComprobanteEncontrado(
     bool TieneCdr,
     DateTime CreadoEn);
 
+/// <summary>Una guía en los resultados de búsqueda.</summary>
+public record GuiaEncontrada(
+    Guid Id,
+    Guid TenantId,
+    string Ruc,
+    string RazonSocial,
+    string TipoGuia,
+    string Numero,
+    DateTime FechaEmision,
+    DateTime FechaTraslado,
+    string DestinatarioNombre,
+    string DestinatarioDoc,
+    string MotivoTraslado,
+    string ModalidadTraslado,
+    decimal? PesoBruto,
+    string Placa,
+    string DireccionLlegada,
+    string Estado,
+    string? CodigoSunat,
+    string? MensajeSunat,
+    bool TieneXml,
+    bool TieneCdr,
+    DateTime CreadoEn)
+{
+    /// <summary>Si el vehículo puede salir.</summary>
+    public bool PuedeIniciarTraslado =>
+        Estado is "ACEPTADO" or "ACEPTADO_CON_OBSERVACIONES";
+}
+
+/// <summary>Guías con el total, para paginar.</summary>
+public record PaginaGuias(
+    IReadOnlyList<GuiaEncontrada> Resultados,
+    int Total,
+    int Pagina,
+    int PorPagina)
+{
+    public int Paginas => (int)Math.Ceiling(Total / (double)PorPagina);
+}
+
 /// <summary>Resultados con el total, para poder paginar.</summary>
 public record PaginaComprobantes(
     IReadOnlyList<ComprobanteEncontrado> Resultados,
@@ -190,6 +229,157 @@ public sealed class RepositorioConsultas
                 parametros, cancellationToken: ct));
 
         return new PaginaComprobantes(filas.ToList(), total, pagina, porPagina);
+    }
+
+    // ---------------------------------------------------------------- guías
+
+    /// <summary>
+    /// Busca guías de remisión de todas las empresas.
+    ///
+    /// SEPARADO DE LA BÚSQUEDA DE COMPROBANTES porque son tablas distintas
+    /// con campos distintos. Unirlas con un UNION obligaría a inventar
+    /// columnas vacías: una guía no tiene importe ni moneda, y un comprobante
+    /// no tiene destino ni vehículo.
+    ///
+    /// Quien da soporte tampoco las busca igual: en un comprobante busca por
+    /// importe o cliente; en una guía, por destino o placa.
+    /// </summary>
+    public async Task<PaginaGuias> BuscarGuiasAsync(
+        FiltroComprobantes filtro, CancellationToken ct = default)
+    {
+        await using var conexion = new NpgsqlConnection(_cadenaOperador);
+        await conexion.OpenAsync(ct);
+
+        var condiciones = new List<string>();
+        var parametros = new DynamicParameters();
+
+        if (!string.IsNullOrWhiteSpace(filtro.Texto))
+        {
+            condiciones.Add("""
+                (t.ruc ILIKE @texto
+                 OR t.razon_social ILIKE @texto
+                 OR g.serie || '-' || lpad(g.correlativo::text, 8, '0') ILIKE @texto
+                 OR g.destinatario_nombre ILIKE @texto
+                 OR g.destinatario_doc ILIKE @texto
+                 OR g.gre->'vehiculo'->>'placa' ILIKE @texto)
+                """);
+
+            parametros.Add("texto", $"%{filtro.Texto.Trim()}%");
+        }
+
+        if (filtro.TenantId is not null)
+        {
+            condiciones.Add("g.tenant_id = @tenantId");
+            parametros.Add("tenantId", filtro.TenantId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(filtro.Estado))
+        {
+            condiciones.Add("g.estado = @estado");
+            parametros.Add("estado", filtro.Estado);
+        }
+
+        if (filtro.Desde is not null)
+        {
+            condiciones.Add("g.fecha_emision >= @desde");
+            parametros.Add("desde", DateOnly.FromDateTime(filtro.Desde.Value));
+        }
+
+        if (filtro.Hasta is not null)
+        {
+            condiciones.Add("g.fecha_emision <= @hasta");
+            parametros.Add("hasta", DateOnly.FromDateTime(filtro.Hasta.Value));
+        }
+
+        var donde = condiciones.Count == 0
+            ? ""
+            : " WHERE " + string.Join(" AND ", condiciones);
+
+        var total = await conexion.ExecuteScalarAsync<int>(new CommandDefinition(
+            $"""
+            SELECT count(*)::int
+              FROM guias g
+              JOIN tenants t ON t.id = g.tenant_id
+            {donde}
+            """,
+            parametros, cancellationToken: ct));
+
+        var porPagina = Math.Clamp(filtro.PorPagina, 1, 200);
+        var pagina = Math.Max(1, filtro.Pagina);
+
+        parametros.Add("limite", porPagina);
+        parametros.Add("saltar", (pagina - 1) * porPagina);
+
+        var filas = await conexion.QueryAsync<GuiaEncontrada>(
+            new CommandDefinition(
+                $"""
+                SELECT g.id            AS "Id",
+                       g.tenant_id     AS "TenantId",
+                       t.ruc           AS "Ruc",
+                       t.razon_social  AS "RazonSocial",
+                       g.tipo_guia     AS "TipoGuia",
+                       g.serie || '-' || lpad(g.correlativo::text, 8, '0') AS "Numero",
+                       g.fecha_emision AS "FechaEmision",
+                       g.fecha_traslado AS "FechaTraslado",
+                       g.destinatario_nombre AS "DestinatarioNombre",
+                       g.destinatario_doc    AS "DestinatarioDoc",
+                       g.motivo_traslado     AS "MotivoTraslado",
+                       g.modalidad_traslado  AS "ModalidadTraslado",
+                       g.peso_bruto    AS "PesoBruto",
+
+                       COALESCE(g.gre->'vehiculo'->>'placa', '') AS "Placa",
+
+                       -- El punto de llegada es lo que busca quien da
+                       -- soporte: "¿a dónde iba ese camión?"
+                       COALESCE(g.gre->'puntoLlegada'->>'direccion', '')
+                                       AS "DireccionLlegada",
+
+                       g.estado        AS "Estado",
+                       g.codigo_sunat  AS "CodigoSunat",
+                       g.mensaje_sunat AS "MensajeSunat",
+
+                       (g.ruta_xml IS NOT NULL) AS "TieneXml",
+                       (g.ruta_cdr IS NOT NULL) AS "TieneCdr",
+
+                       g.creado_en     AS "CreadoEn"
+
+                  FROM guias g
+                  JOIN tenants t ON t.id = g.tenant_id
+                {donde}
+                 ORDER BY g.creado_en DESC
+                 LIMIT @limite OFFSET @saltar
+                """,
+                parametros, cancellationToken: ct));
+
+        return new PaginaGuias(filas.ToList(), total, pagina, porPagina);
+    }
+
+    /// <summary>Ruta de un archivo de guía, para descargarlo como operador.</summary>
+    public async Task<(Guid TenantId, string Numero, string? Ruta)?>
+        RutaArchivoGuiaAsync(Guid guiaId, string tipo, CancellationToken ct = default)
+    {
+        var columna = tipo switch
+        {
+            "xml" => "g.ruta_xml",
+            "cdr" => "g.ruta_cdr",
+            _ => throw new ArgumentException(
+                "Solo se pueden descargar 'xml' y 'cdr'.", nameof(tipo))
+        };
+
+        await using var conexion = new NpgsqlConnection(_cadenaOperador);
+        await conexion.OpenAsync(ct);
+
+        return await conexion.QuerySingleOrDefaultAsync<
+            (Guid TenantId, string Numero, string? Ruta)?>(
+            new CommandDefinition(
+                $"""
+                SELECT g.tenant_id AS "TenantId",
+                       g.serie || '-' || lpad(g.correlativo::text, 8, '0') AS "Numero",
+                       {columna}   AS "Ruta"
+                  FROM guias g
+                 WHERE g.id = @guiaId
+                """,
+                new { guiaId }, cancellationToken: ct));
     }
 
     /// <summary>Historial de intentos de un comprobante, sin filtro de tenant.</summary>

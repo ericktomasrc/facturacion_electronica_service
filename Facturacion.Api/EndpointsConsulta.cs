@@ -61,6 +61,47 @@ public static class EndpointsConsulta
             "Quien da soporte tiene en la cabeza un dato, no un campo: puede " +
             "ser el RUC, el nombre de la empresa o el número de la factura.");
 
+        // ------------------------------------------------------------ guías
+
+        grupo.MapGet("/guias", async (
+            RepositorioConsultas consultas,
+            string? texto, Guid? tenantId, string? estado,
+            DateTime? desde, DateTime? hasta,
+            int? pagina, int? porPagina,
+            CancellationToken ct) =>
+        {
+            var filtro = new FiltroComprobantes
+            {
+                Texto = texto,
+                TenantId = tenantId,
+                Estado = estado,
+                Desde = desde,
+                Hasta = hasta,
+                Pagina = pagina ?? 1,
+                PorPagina = porPagina ?? 25
+            };
+
+            return Results.Ok(await consultas.BuscarGuiasAsync(filtro, ct));
+        })
+        .WithSummary("Busca guías de remisión de todas las empresas")
+        .WithDescription(
+            "El parámetro 'texto' busca a la vez en RUC, razón social, número " +
+            "de guía, destinatario y PLACA del vehículo.\n\n" +
+            "La placa importa: cuando llaman desde una fiscalización en " +
+            "carretera, es el único dato que tiene quien pregunta.");
+
+        grupo.MapGet("/guias/{id:guid}/xml", (
+            Guid id, RepositorioConsultas consultas, IAlmacenArchivos archivos,
+            CancellationToken ct) =>
+            DescargarGuiaAsync(id, "xml", consultas, archivos, ct))
+            .WithSummary("Descarga el XML de una guía");
+
+        grupo.MapGet("/guias/{id:guid}/cdr", (
+            Guid id, RepositorioConsultas consultas, IAlmacenArchivos archivos,
+            CancellationToken ct) =>
+            DescargarGuiaAsync(id, "cdr", consultas, archivos, ct))
+            .WithSummary("Descarga la constancia de una guía");
+
         grupo.MapGet("/{id:guid}/historial", async (
             Guid id, RepositorioConsultas consultas, CancellationToken ct) =>
         {
@@ -163,6 +204,44 @@ public static class EndpointsConsulta
             return Results.File(pdf, "application/pdf", $"{datos.Numero}.pdf");
         })
         .WithSummary("Genera la representación impresa");
+    }
+
+    private static async Task<IResult> DescargarGuiaAsync(
+        Guid id, string tipo,
+        RepositorioConsultas consultas, IAlmacenArchivos archivos,
+        CancellationToken ct)
+    {
+        var ubicacion = await consultas.RutaArchivoGuiaAsync(id, tipo, ct);
+
+        if (ubicacion is null)
+            return Results.NotFound(new RespuestaError("No se encontró la guía."));
+
+        if (string.IsNullOrWhiteSpace(ubicacion.Value.Ruta))
+        {
+            return Results.NotFound(new RespuestaError(
+                "Archivo no disponible.",
+                tipo == "xml"
+                    ? "La guía todavía no se firmó."
+                    : "La constancia solo existe cuando SUNAT ya respondió."));
+        }
+
+        var contenido = await archivos.LeerAsync(ubicacion.Value.Ruta!, ct);
+
+        if (contenido is null)
+        {
+            return Results.Problem(
+                detail: $"La base registra el archivo en " +
+                        $"'{ubicacion.Value.Ruta}' pero el almacén no lo tiene.",
+                statusCode: StatusCodes.Status500InternalServerError,
+                title: "Archivo registrado pero ausente");
+        }
+
+        var (mime, extension) = tipo == "xml"
+            ? ("application/xml", "xml")
+            : ("application/zip", "zip");
+
+        return Results.File(contenido, mime,
+            $"{ubicacion.Value.Numero}.{extension}");
     }
 
     private static async Task<IResult> DescargarAsync(

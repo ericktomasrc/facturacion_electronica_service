@@ -100,6 +100,13 @@
                   padding:2px 9px; font-size:12px; }
   .usuario a { color:var(--acento); text-decoration:none; }
   .usuario a:hover { text-decoration:underline; }
+  .pestanas { display:flex; gap:16px; border-bottom:1px solid var(--borde);
+              margin-bottom:16px; }
+  .pestana { font-size:14px; color:var(--tenue); cursor:pointer;
+             padding:0 2px 9px; border:none; background:none;
+             border-bottom:2px solid transparent; margin-bottom:-1px; }
+  .pestana.activa { color:var(--texto); border-bottom-color:var(--acento); }
+
   .paginacion { display:flex; align-items:center; justify-content:space-between;
                 gap:12px; margin-top:14px; font-size:13.5px; color:var(--tenue); }
 
@@ -148,6 +155,11 @@
     <a href="/comprobantes.html" class="activo">Comprobantes</a>
     <a href="/cuenta.html">Mi cuenta</a>
   </nav>
+
+  <div class="pestanas">
+    <button class="pestana activa" data-vista="comprobantes">Comprobantes</button>
+    <button class="pestana" data-vista="guias">Guías de remisión</button>
+  </div>
 
   <div class="tarjeta">
     <div class="filtros">
@@ -204,7 +216,7 @@ const elem = id => document.getElementById(id);
 const esc = t => String(t ?? "").replace(/[&<>"']/g,
   c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
-const estado = { pagina: 1, ultima: null };
+const estado = { vista: "comprobantes", pagina: 1, ultima: null };
 
 
 // ---------------------------------------------------------------- sesión
@@ -278,6 +290,46 @@ async function cargarUsuario() {
 }
 
 elem("btn-buscar").onclick = () => { estado.pagina = 1; buscar(); };
+
+document.querySelectorAll("[data-vista]").forEach(b =>
+  b.onclick = () => {
+    estado.vista = b.dataset.vista;
+    estado.pagina = 1;
+
+    document.querySelectorAll("[data-vista]").forEach(x =>
+      x.classList.toggle("activa", x.dataset.vista === estado.vista));
+
+    // Los filtros no son los mismos: una guía no tiene tipo de comprobante
+    // ni importe, y sus estados son otros.
+    ajustarFiltros();
+
+    buscar();
+  });
+
+function ajustarFiltros() {
+  const esGuia = estado.vista === "guias";
+
+  // El tipo de comprobante no aplica a las guías.
+  elem("f-tipo").parentElement.style.display = esGuia ? "none" : "";
+
+  elem("f-texto").placeholder = esGuia
+    ? "RUC, empresa, número, destinatario o PLACA"
+    : "RUC, empresa, número o cliente";
+
+  // Los estados de una guía incluyen ANULADO y no incluyen los de boleta.
+  const opciones = esGuia
+    ? [["", "Todos"], ["ACEPTADO", "Aceptada"],
+       ["RECHAZADO", "Rechazada"], ["ENVIADO", "Esperando respuesta"],
+       ["ENCOLADO", "En proceso"], ["BORRADOR", "Pendiente"],
+       ["ANULADO", "Anulada"]]
+    : [["", "Todos"], ["ACEPTADO", "Aceptado"],
+       ["ACEPTADO_CON_OBSERVACIONES", "Con observaciones"],
+       ["RECHAZADO", "Rechazado"], ["BORRADOR", "Pendiente"],
+       ["ENCOLADO", "En proceso"], ["ANULADO", "Anulado"]];
+
+  elem("f-estado").innerHTML = opciones
+    .map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+}
 elem("d-cerrar").onclick = () => elem("velo-detalle").classList.remove("visible");
 
 ["f-texto","f-tipo","f-estado","f-desde","f-hasta"].forEach(id =>
@@ -316,7 +368,8 @@ async function buscar() {
 
   const texto = elem("f-texto").value.trim();
   if (texto) parametros.set("texto", texto);
-  if (elem("f-tipo").value) parametros.set("tipo", elem("f-tipo").value);
+  if (estado.vista !== "guias" && elem("f-tipo").value)
+    parametros.set("tipo", elem("f-tipo").value);
   if (elem("f-estado").value) parametros.set("estado", elem("f-estado").value);
   if (elem("f-desde").value) parametros.set("desde", elem("f-desde").value);
   if (elem("f-hasta").value) parametros.set("hasta", elem("f-hasta").value);
@@ -328,8 +381,14 @@ async function buscar() {
   boton.disabled = true;
 
   try {
-    estado.ultima = await api("/admin/comprobantes?" + parametros);
-    pintar();
+    const ruta = estado.vista === "guias"
+      ? "/admin/comprobantes/guias?"
+      : "/admin/comprobantes?";
+
+    estado.ultima = await api(ruta + parametros);
+
+    if (estado.vista === "guias") pintarGuias();
+    else pintar();
   } catch (e) {
     elem("resultados").innerHTML =
       `<div class="vacio" style="color:var(--mal)">${esc(e.message)}</div>`;
@@ -375,6 +434,107 @@ function pintar() {
 
   document.querySelectorAll("[data-descargar]").forEach(b =>
     b.onclick = () => descargar(b.dataset.descargar, b.dataset.tipo, b));
+}
+
+function pintarGuias() {
+  const d = estado.ultima;
+
+  if (d.total === 0) {
+    elem("resultados").innerHTML =
+      `<div class="vacio">Ninguna guía coincide con la búsqueda.</div>`;
+    return;
+  }
+
+  elem("resultados").innerHTML = `
+    <table>
+      <tr>
+        <th>Emisor</th><th>Guía</th><th>Traslado</th><th>Destino</th>
+        <th>Vehículo</th><th>Estado</th>
+        <th style="text-align:right">Archivos</th>
+      </tr>
+      ${d.resultados.map(filaGuia).join("")}
+    </table>
+
+    <div class="paginacion">
+      <span>${d.total.toLocaleString("es-PE")}
+        ${d.total === 1 ? "guía" : "guías"}</span>
+      <span>
+        <button class="mini" id="btn-anterior" ${d.pagina <= 1 ? "disabled" : ""}>Anterior</button>
+        <span style="margin:0 10px">Página ${d.pagina} de ${d.paginas}</span>
+        <button class="mini" id="btn-siguiente" ${d.pagina >= d.paginas ? "disabled" : ""}>Siguiente</button>
+      </span>
+    </div>`;
+
+  elem("btn-anterior").onclick = () => { estado.pagina--; buscar(); };
+  elem("btn-siguiente").onclick = () => { estado.pagina++; buscar(); };
+
+  document.querySelectorAll("[data-descargar-guia]").forEach(b =>
+    b.onclick = () => descargar(
+      b.dataset.descargarGuia, b.dataset.tipo, b, "guias/"));
+}
+
+const MOTIVOS = {
+  "01":"Venta", "02":"Compra", "03":"Venta a terceros",
+  "04":"Entre establecimientos", "05":"Consignación", "06":"Devolución",
+  "07":"Recojo transformados", "08":"Importación", "09":"Exportación",
+  "13":"Otros", "14":"Venta por confirmar", "17":"Para transformación",
+  "18":"Emisor itinerante"
+};
+
+function filaGuia(g) {
+  return `<tr class="fila">
+    <td>
+      <div class="recorte" title="${esc(g.razonSocial)}">${esc(g.razonSocial)}</div>
+      <div class="mono tenue">${esc(g.ruc)}</div>
+    </td>
+    <td>
+      <div class="mono">${esc(g.numero)}</div>
+      <div class="tenue" style="font-size:12px">
+        ${esc(MOTIVOS[g.motivoTraslado] ?? g.motivoTraslado)}</div>
+    </td>
+    <td class="tenue" style="white-space:nowrap">
+      ${g.fechaTraslado.slice(0,10)}
+      <div style="font-size:12px">${g.pesoBruto ?? 0} kg</div>
+    </td>
+    <td>
+      <div class="recorte" title="${esc(g.destinatarioNombre)}">
+        ${esc(g.destinatarioNombre)}</div>
+      <div class="tenue recorte" style="font-size:12px;max-width:190px"
+           title="${esc(g.direccionLlegada)}">${esc(g.direccionLlegada)}</div>
+    </td>
+    <td class="mono">${esc(g.placa) || "—"}
+      <div class="tenue" style="font-size:12px;font-family:inherit">
+        ${g.modalidadTraslado === "01" ? "público" : "privado"}</div>
+    </td>
+    <td>${insigniaGuia(g)}</td>
+    <td style="text-align:right;white-space:nowrap">
+      ${g.tieneXml ? `<button class="mini" data-descargar-guia="${g.id}" data-tipo="xml">XML</button>` : ""}
+      ${g.tieneCdr ? `<button class="mini" data-descargar-guia="${g.id}" data-tipo="cdr">CDR</button>` : ""}
+    </td>
+  </tr>`;
+}
+
+/// La insignia de una guía dice si el vehículo puede salir.
+///
+/// Es la única pregunta que importa cuando alguien consulta una guía, y por
+/// eso el texto no repite el estado técnico sino su consecuencia.
+function insigniaGuia(g) {
+  if (g.puedeIniciarTraslado)
+    return `<span class="insignia i-ok" title="${esc(g.mensajeSunat ?? "")}">` +
+           `puede trasladar</span>`;
+
+  const mapa = {
+    RECHAZADO: ["i-mal", "rechazada"],
+    ANULADO:   ["i-tenue", "anulada"],
+    ENVIADO:   ["i-aviso", "esperando SUNAT"],
+    ENCOLADO:  ["i-aviso", "en proceso"],
+    BORRADOR:  ["i-aviso", "pendiente"]
+  };
+
+  const [clase, texto] = mapa[g.estado] || ["i-tenue", g.estado.toLowerCase()];
+
+  return `<span class="insignia ${clase}" title="${esc(g.mensajeSunat ?? "")}">` +
+         `${texto}</span>`;
 }
 
 function fila(c) {
@@ -433,11 +593,11 @@ const nombreTipo = t => ({
 // forma de descargar desde un endpoint protegido sin exponer la clave en
 // la dirección, donde quedaría en el historial y en los registros del
 // servidor.
-async function descargar(id, tipo, boton) {
+async function descargar(id, tipo, boton, prefijo = "") {
   boton.disabled = true;
 
   try {
-    const r = await fetch(`/admin/comprobantes/${id}/${tipo}`);
+    const r = await fetch(`/admin/comprobantes/${prefijo}${id}/${tipo}`);
 
     if (r.status === 401) { location.href = "/login.html"; return; }
 
@@ -508,7 +668,7 @@ async function verDetalle(id) {
   }
 }
 
-cargarUsuario().then(ok => { if (ok) buscar(); });
+cargarUsuario().then(ok => { if (ok) { ajustarFiltros(); buscar(); } });
 </script>
 </body>
 </html>
