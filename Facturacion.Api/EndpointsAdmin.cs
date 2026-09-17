@@ -108,6 +108,61 @@ public static class EndpointsAdmin
             "principal puede declarar, pagar y modificar datos en el portal " +
             "de SUNAT, y ese nivel de acceso no tiene por qué vivir aquí.");
 
+        // ------------------------------------------- credenciales de guías
+
+        grupo.MapPost("/tenants/{id:guid}/credenciales-gre", async (
+            Guid id, CredencialesGre credenciales,
+            RepositorioAdmin admin, IProtectorDeSecretos protector,
+            CancellationToken ct) =>
+        {
+            try
+            {
+                var guardadas = await admin.GuardarCredencialesGreAsync(
+                    id, credenciales.ClientId, credenciales.ClientSecret,
+                    protector, ct);
+
+                return guardadas
+                    ? Results.Ok(new
+                    {
+                        mensaje =
+                            "Credenciales de guías guardadas y cifradas. " +
+                            "La emisión de guías queda habilitada."
+                    })
+                    : Results.NotFound(new RespuestaError("No se encontró la empresa."));
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new RespuestaError("Datos inválidos.", ex.Message));
+            }
+        })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.ProduccionCambiar))
+        .WithSummary("Guarda las credenciales de API para guías de remisión")
+        .WithDescription(
+            "El client_id y el client_secret los genera el contribuyente en " +
+            "su menú SOL, opción 'Credenciales de API SUNAT'.\n\n" +
+            "Son DISTINTAS de la clave SOL: esta sirve para las facturas, " +
+            "aquellas solo para guías. Una empresa que emita ambas cosas " +
+            "necesita los dos juegos.");
+
+        grupo.MapPost("/tenants/{id:guid}/gre-habilitado", async (
+            Guid id, CambioGreHabilitado cambio,
+            RepositorioAdmin admin, CancellationToken ct) =>
+        {
+            var cambiado = await admin.CambiarGreHabilitadoAsync(
+                id, cambio.Habilitado, ct);
+
+            return cambiado
+                ? Results.Ok(new
+                {
+                    mensaje = cambio.Habilitado
+                        ? "Emisión de guías habilitada."
+                        : "Emisión de guías deshabilitada."
+                })
+                : Results.NotFound(new RespuestaError("No se encontró la empresa."));
+        })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.ProduccionCambiar))
+        .WithSummary("Activa o desactiva la emisión de guías");
+
         grupo.MapGet("/tenants/{id:guid}/revision-produccion", async (
             Guid id, ProveedorCredenciales credenciales, CancellationToken ct) =>
             Results.Ok(await credenciales.RevisarAsync(id, ct)))
@@ -367,3 +422,7 @@ public record CambioEstadoSerie(bool Activo);
 public record CredencialesSol(string Usuario, string Clave);
 
 public record CambioAmbiente(string Ambiente);
+
+public record CredencialesGre(string ClientId, string ClientSecret);
+
+public record CambioGreHabilitado(bool Habilitado);

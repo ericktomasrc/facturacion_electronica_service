@@ -48,10 +48,63 @@ public class PeticionComprobante
     public List<LineaDto> Lineas { get; set; } = [];
 
     /// <summary>
+    /// Detracción, cuando la operación está sujeta al SPOT.
+    ///
+    /// Solo aplica a facturas. Si se envía en una boleta, se ignora: SUNAT no
+    /// admite detracción en comprobantes que no dan crédito fiscal.
+    /// </summary>
+    public DetraccionDto? Detraccion { get; set; }
+
+    /// <summary>
     /// Campos propios de la empresa. Se guardan tal cual y se pueden consultar
     /// después, pero NUNCA viajan a SUNAT.
     /// </summary>
     public Dictionary<string, object>? Extra { get; set; }
+}
+
+/// <summary>
+/// Datos de la detracción.
+///
+/// QUÉ ES: en ciertas operaciones el comprador no paga el total al vendedor.
+/// Retiene un porcentaje y lo deposita en la cuenta que el vendedor tiene en
+/// el Banco de la Nación, destinada solo a pagar impuestos.
+/// </summary>
+public class DetraccionDto
+{
+    /// <summary>
+    /// Catálogo 51. "1001" general, "1002" hidrobiológicos,
+    /// "1003" transporte de pasajeros, "1004" transporte de carga.
+    /// </summary>
+    public string TipoOperacion { get; set; } = TipoOperacionDetraccion.General;
+
+    /// <summary>
+    /// Catálogo 54: qué bien o servicio está sujeto.
+    ///
+    /// Para los tipos 1002, 1003 y 1004, SUNAT obliga a un valor concreto:
+    /// 004, 028 y 027 respectivamente. Enviar otro rechaza la factura.
+    /// </summary>
+    [Required]
+    public string CodigoBienServicio { get; set; } = "";
+
+    /// <summary>La tasa que se retiene. 12 significa 12%.</summary>
+    [Range(0.01, 100)]
+    public decimal Porcentaje { get; set; }
+
+    /// <summary>
+    /// Opcional. Si no se envía, se calcula sobre el importe total y se
+    /// redondea al entero más próximo, que es lo que hace el Banco de la
+    /// Nación. Declarar céntimos produce diferencias con el depósito real.
+    /// </summary>
+    public decimal? Monto { get; set; }
+
+    /// <summary>
+    /// La cuenta de detracciones del vendedor. La abre él, no el comprador.
+    /// </summary>
+    [Required]
+    public string CuentaBancoNacion { get; set; } = "";
+
+    /// <summary>Catálogo 59. Por defecto, depósito en cuenta.</summary>
+    public string MedioDePago { get; set; } = "001";
 }
 
 public class ReceptorDto

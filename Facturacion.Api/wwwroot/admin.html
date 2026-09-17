@@ -673,6 +673,7 @@ async function cargarPestana() {
 
       elem("btn-sol").onclick = guardarCredenciales;
       elem("btn-ambiente").onclick = cambiarAmbiente;
+      elem("btn-gre").onclick = guardarCredencialesGre;
 
     } else if (estado.pestana === "webhooks") {
       estado.webhooks = await api(`/admin/tenants/${id}/webhooks`);
@@ -725,8 +726,6 @@ function vistaSeries() {
           <option value="03">Boleta</option>
           <option value="07">Nota de crédito</option>
           <option value="08">Nota de débito</option>
-          <option value="09">Guía de remisión (remitente)</option>
-          <option value="31">Guía de remisión (transportista)</option>
         </select></label>
       <label>Serie<input id="s-serie" maxlength="4" placeholder="F001">
         <div class="err" id="e-serie"></div></label>
@@ -1045,6 +1044,39 @@ function vistaProduccion() {
       en el portal de SUNAT, y ese nivel de acceso no tiene por qué vivir aquí.
     </div>
 
+    <h2>Guías de remisión</h2>
+    <p class="ayuda" style="margin-top:0">
+      Las guías usan un canal distinto al de las facturas: no es SOAP con
+      clave SOL, sino una API REST con credenciales propias. El contribuyente
+      las genera en su menú SOL, opción &laquo;Credenciales de API SUNAT&raquo;.
+    </p>
+
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      ${t.greListo
+        ? `<span class="insignia i-ok">habilitadas</span>`
+        : `<span class="insignia i-tenue">sin configurar</span>`}
+      ${t.greClientId
+        ? `<span class="tenue mono" style="font-size:12.5px">
+             ${esc(t.greClientId)}</span>` : ""}
+    </div>
+
+    <div class="rejilla" style="margin-top:0">
+      <label>client_id
+        <input id="g-client" placeholder="el que generó en su menú SOL"
+               value="${esc(t.greClientId ?? "")}"></label>
+      <label>client_secret
+        <input id="g-secret" type="password"
+               placeholder="${t.tieneGreSecret ? "•••••• (guardado)" : "el secreto"}">
+      </label>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:22px">
+      <button id="btn-gre">Guardar credenciales de guías</button>
+      <span class="tenue" style="font-size:12.5px">
+        El secreto se cifra igual que el certificado.
+      </span>
+    </div>
+
     <h2>Revisión previa</h2>
     ${r.listo
       ? `<div class="secreto">Todo listo. Esta empresa puede emitir en producción.</div>`
@@ -1096,6 +1128,43 @@ async function guardarCredenciales() {
     avisar("Credenciales guardadas y cifradas", "", "ok");
 
     elem("s-clave").value = "";
+    await recargar();
+
+  } catch (e) {
+    avisar(e.message, e.detalle, "mal");
+  } finally {
+    boton.disabled = false;
+  }
+}
+
+async function guardarCredencialesGre() {
+  const clientId = elem("g-client").value.trim();
+  const secret = elem("g-secret").value;
+
+  if (!clientId) {
+    avisar("Falta el client_id", "", "mal");
+    return;
+  }
+
+  if (!secret) {
+    avisar("Falta el client_secret",
+           "Escríbelo aunque ya hubiera uno guardado: no se puede leer.", "mal");
+    return;
+  }
+
+  const boton = elem("btn-gre");
+  boton.disabled = true;
+
+  try {
+    const r = await api(`/admin/tenants/${estado.seleccionada.id}/credenciales-gre`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId, clientSecret: secret })
+    });
+
+    avisar("Credenciales de guías guardadas", r.mensaje, "ok");
+
+    elem("g-secret").value = "";
     await recargar();
 
   } catch (e) {
@@ -1364,17 +1433,8 @@ async function reintentarEntrega(id) {
   } catch (e) { avisar(e.message, e.detalle, "mal"); }
 }
 
-    const nombreTipo = t => ({
-        "01": "Factura",
-        "03": "Boleta",
-        "07": "Nota de crédito",
-        "08": "Nota de débito",
-
-        // Las guías usan series con prefijo obligatorio: T para el remitente y
-        // V para el transportista. Lo impone SUNAT, no es una convención nuestra.
-        "09": "Guía de remisión (remitente)",
-        "31": "Guía de remisión (transportista)"
-    }[t] || t);
+const nombreTipo = t =>
+  ({ "01":"Factura", "03":"Boleta", "07":"Nota de crédito", "08":"Nota de débito" }[t] || t);
 
 // ----------------------------------------------------------------- acciones
 

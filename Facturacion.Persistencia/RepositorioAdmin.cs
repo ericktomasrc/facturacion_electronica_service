@@ -19,9 +19,18 @@ public record TenantAdmin(
     int Series,
     int Claves,
     string? UsuarioSol,
-    bool TieneClaveSol)
+    bool TieneClaveSol,
+    bool GreHabilitado,
+    string? GreClientId,
+    bool TieneGreSecret)
 {
     public bool EsProduccion => Ambiente == "produccion";
+
+    /// <summary>Puede emitir guías en producción.</summary>
+    public bool GreListo =>
+        GreHabilitado &&
+        !string.IsNullOrWhiteSpace(GreClientId) &&
+        TieneGreSecret;
 }
 
 /// <summary>Datos para dar de alta una empresa.</summary>
@@ -136,7 +145,10 @@ public sealed class RepositorioAdmin
                          WHERE k.tenant_id = t.id AND k.activo)  AS "Claves",
 
                        t.usuario_sol      AS "UsuarioSol",
-                       (t.clave_sol_cifrada IS NOT NULL) AS "TieneClaveSol"
+                       (t.clave_sol_cifrada IS NOT NULL) AS "TieneClaveSol",
+                       t.gre_habilitado   AS "GreHabilitado",
+                       t.gre_client_id    AS "GreClientId",
+                       (t.gre_client_secret_cifrado IS NOT NULL) AS "TieneGreSecret"
 
                   FROM tenants t
                  -- Alfabético por razón social. Con cincuenta empresas, el
@@ -218,6 +230,60 @@ public sealed class RepositorioAdmin
              WHERE id = @tenantId
             """,
             new { tenantId, usuario, cifrada }, cancellationToken: ct));
+
+        return filas > 0;
+    }
+
+    /// <summary>
+    /// Guarda las credenciales de la API de guías de remisión.
+    ///
+    /// SON DISTINTAS DE LAS CREDENCIALES SOL. El contribuyente las genera en
+    /// su menú SOL, opción "Credenciales de API SUNAT", una sola vez, y solo
+    /// sirven para guías.
+    ///
+    /// Una empresa que emita facturas y guías tendrá los dos juegos: la clave
+    /// SOL para las facturas, y estas dos para las guías.
+    /// </summary>
+    public async Task<bool> GuardarCredencialesGreAsync(
+        Guid tenantId, string clientId, string clientSecret,
+        IProtectorDeSecretos protector, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(clientId))
+            throw new ArgumentException("Falta el client_id.", nameof(clientId));
+
+        if (string.IsNullOrWhiteSpace(clientSecret))
+            throw new ArgumentException("Falta el client_secret.", nameof(clientSecret));
+
+        var cifrado = protector.ProtegerTexto(clientSecret);
+
+        await using var conexion = await AbrirAsync(ct);
+
+        var filas = await conexion.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE tenants
+               SET gre_client_id = @clientId,
+                   gre_client_secret_cifrado = @cifrado,
+
+                   -- Guardar las credenciales habilita las guías: no tiene
+                   -- sentido tenerlas cargadas y el módulo apagado.
+                   gre_habilitado = true
+             WHERE id = @tenantId
+            """,
+            new { tenantId, clientId = clientId.Trim(), cifrado },
+            cancellationToken: ct));
+
+        return filas > 0;
+    }
+
+    /// <summary>Activa o desactiva la emisión de guías.</summary>
+    public async Task<bool> CambiarGreHabilitadoAsync(
+        Guid tenantId, bool habilitado, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+
+        var filas = await conexion.ExecuteAsync(new CommandDefinition(
+            "UPDATE tenants SET gre_habilitado = @habilitado WHERE id = @tenantId",
+            new { tenantId, habilitado }, cancellationToken: ct));
 
         return filas > 0;
     }

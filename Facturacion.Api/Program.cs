@@ -61,6 +61,14 @@ builder.Services.AddSingleton(new RepositorioAdmin(cadenaOperador));
 builder.Services.AddSingleton(new RepositorioWebhooks(cadenaOperador));
 builder.Services.AddSingleton(new RepositorioConsultas(cadenaOperador));
 builder.Services.AddSingleton(new RepositorioRoles(cadenaOperador));
+
+// Las guías tienen su propio repositorio: otra tabla, otro canal y otro
+// ritmo de reintentos.
+builder.Services.AddSingleton(proveedor =>
+    new RepositorioGuias(
+        proveedor.GetRequiredService<FabricaSesiones>(),
+        cadenaOperador));
+
 // --- Correo ----------------------------------------------------------------
 //
 // Las credenciales son secretos y salen del .env, como todo lo demás. Si no
@@ -139,23 +147,22 @@ builder.Services.AddSwaggerGen(opciones =>
             "Toda petición requiere una clave de acceso.\n\n" +
             "**Emisión y consulta** (`/v1/*`): la clave determina qué empresa " +
             "emite, así que el RUC del emisor NO se envía en el cuerpo. " +
-            "En Authorize, campo `ApiKey`, escribe:\n\n" +
-            "`Bearer fac_dev_UkV5QkFOX0RFU0FSUk9MTE9fMjAyNg`\n\n" +
-            "**Administración** (`/admin/*`): usa la clave del operador, que " +
-            "es distinta porque da acceso a los datos de todas las empresas. " +
-            "En Authorize, campo `AdminKey`, escribe solo:\n\n" +
-            "`operador-dev-2026`"
+            "En Authorize, campo `ApiKey`, escribe `Bearer` seguido de la " +
+            "clave que se le entregó a esa empresa.\n\n" +
+            "**Administración** (`/admin/*`): se entra con usuario y " +
+            "contraseña desde el panel, y la sesión viaja en una cookie.\n\n" +
+            "Ninguna clave aparece en esta documentación a propósito: si " +
+            "estuviera aquí, estaría también en el repositorio."
     });
 
     // DOS ESQUEMAS DE AUTENTICACIÓN, Y ES A PROPÓSITO.
     //
-    // Los emisores usan su clave en Authorization: Bearer. Los endpoints de
-    // operación usan una clave distinta en X-Admin-Key, porque muestran datos
-    // de TODAS las empresas.
+    // Los emisores usan su clave en Authorization: Bearer. El panel usa
+    // sesión con cookie, que el navegador envía sola.
     //
-    // Declarar los dos en Swagger no es un detalle cosmético: sin el segundo,
-    // toda la administración había que probarla escribiendo comandos a mano,
-    // y eso hace que se pruebe menos.
+    // Declarar el primero en Swagger no es un detalle cosmético: sin él,
+    // probar la API obligaría a escribir comandos a mano, y eso hace que se
+    // pruebe menos.
 
     opciones.AddSecurityDefinition("ApiKey", new OpenApiSecurityScheme
     {
@@ -164,18 +171,8 @@ builder.Services.AddSwaggerGen(opciones =>
         In = ParameterLocation.Header,
         Description =
             "Clave del EMISOR. Escribe: Bearer {tu clave}\n\n" +
-            "Sirve para /v1/*: emitir comprobantes y consultarlos.",
+            "Sirve para /v1/*: emitir comprobantes, guías y consultarlos.",
         Scheme = "Bearer"
-    });
-
-    opciones.AddSecurityDefinition("AdminKey", new OpenApiSecurityScheme
-    {
-        Name = "X-Admin-Key",
-        Type = SecuritySchemeType.ApiKey,
-        In = ParameterLocation.Header,
-        Description =
-            "Clave del OPERADOR de la plataforma. Escribe solo la clave, sin prefijo.\n\n" +
-            "Sirve para /admin/*: empresas, certificados, series, claves y webhooks."
     });
 
     opciones.AddSecurityRequirement(new OpenApiSecurityRequirement
@@ -190,25 +187,9 @@ builder.Services.AddSwaggerGen(opciones =>
                 }
             },
             Array.Empty<string>()
-        },
-        {
-            new OpenApiSecurityScheme
-            {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "AdminKey"
-                }
-            },
-            Array.Empty<string>()
         }
     });
 });
-
-builder.Services.AddSingleton(proveedor =>
-    new RepositorioGuias(
-        proveedor.GetRequiredService<FabricaSesiones>(),
-        cadenaOperador));
 
 var app = builder.Build();
 
@@ -232,8 +213,6 @@ if (app.Environment.IsDevelopment())
     {
         opciones.SwaggerEndpoint("/swagger/v1/swagger.json", "Facturación v1");
 
-        // Swagger queda en la raíz: al levantar la API, el navegador abre
-        // directamente la documentación.
         opciones.RoutePrefix = "docs";
         opciones.DocumentTitle = "Facturación electrónica";
     });
@@ -303,16 +282,6 @@ app.MapGet("/health", () => Results.Ok(new { estado = "vivo" }))
    .WithTags("Servicio")
    .WithSummary("Comprueba que el servicio responde. No requiere clave.");
 
-//app.MapGet("/", () => Results.Ok(new
-//{
-//    servicio = "Facturación electrónica",
-//    version = "v1",
-//    documentacion = "/docs"
-//}))
-//   .WithName("Raiz")
-//   .WithTags("Servicio")
-//   .ExcludeFromDescription();
-
 // La raíz lleva al panel.
 //
 // Devolver un JSON informativo era cómodo para desarrollar y confuso para
@@ -354,6 +323,18 @@ app.MapPost("/v1/comprobantes", async (
         return Results.BadRequest(new RespuestaError(
             "Falta el tipo de cambio.",
             "Los comprobantes en moneda distinta de PEN deben declararlo."));
+
+    // La detracción solo existe en facturas.
+    //
+    // SUNAT no la admite en boletas porque no dan crédito fiscal, y el
+    // sistema de detracciones está pensado para operaciones que sí lo dan.
+    if (peticion.Detraccion is not null && peticion.Tipo != TipoComprobante.Factura)
+    {
+        return Results.BadRequest(new RespuestaError(
+            "La detracción solo aplica a facturas.",
+            "SUNAT no admite detracción en comprobantes que no dan crédito " +
+            "fiscal, como las boletas."));
+    }
 
     // --- Construcción del comprobante ---
     // El emisor sale del tenant, NUNCA de la petición.
@@ -405,7 +386,9 @@ app.MapPost("/v1/comprobantes", async (
     "Responde 202: el comprobante queda registrado, pero todavía NO fue a SUNAT. " +
     "Eso lo hace el worker.\n\n" +
     "Envía la cabecera Idempotency-Key para que un reintento no produzca un duplicado: " +
-    "si la clave ya se usó, responde 200 con el comprobante original.")
+    "si la clave ya se usó, responde 200 con el comprobante original.\n\n" +
+    "**Detracción:** si la operación está sujeta al SPOT, incluye el objeto " +
+    "`detraccion`. El monto se calcula solo si no lo envías.")
 .Produces<RespuestaComprobante>(StatusCodes.Status202Accepted)
 .Produces<RespuestaComprobante>(StatusCodes.Status200OK)
 .Produces<RespuestaError>(StatusCodes.Status400BadRequest)
@@ -555,9 +538,12 @@ static ComprobanteBase ConstruirComprobante(
 
     var fecha = peticion.FechaEmision ?? DateTime.Now;
 
-    return peticion.Tipo switch
+    // LA FACTURA SE CONSTRUYE APARTE porque puede llevar detracción, y eso
+    // no cabe en un inicializador: el monto depende de los totales, y los
+    // totales dependen de la factura ya completa.
+    if (peticion.Tipo == TipoComprobante.Factura)
     {
-        TipoComprobante.Factura => new Factura
+        var factura = new Factura
         {
             Serie = peticion.Serie,
             FechaEmision = fecha,
@@ -568,8 +554,16 @@ static ComprobanteBase ConstruirComprobante(
             Emisor = emisor,
             Receptor = receptor,
             Lineas = lineas
-        },
+        };
 
+        if (peticion.Detraccion is not null)
+            AplicarDetraccion(factura, peticion.Detraccion);
+
+        return factura;
+    }
+
+    return peticion.Tipo switch
+    {
         TipoComprobante.Boleta => new Boleta
         {
             Serie = peticion.Serie,
@@ -587,4 +581,47 @@ static ComprobanteBase ConstruirComprobante(
             $"Tipo de comprobante no soportado por este endpoint: {peticion.Tipo}. " +
             "Las notas de crédito y débito tienen su propia ruta.")
     };
+}
+
+/// <summary>
+/// Añade los datos de detracción a una factura ya construida.
+///
+/// SE HACE APARTE Y NO EN EL INICIALIZADOR porque necesita los totales, y los
+/// totales necesitan la factura completa. Calcularlo todo de una vez obligaría
+/// a duplicar aquí la lógica del IGV y los descuentos, que es justo el tipo de
+/// duplicación que termina divergiendo.
+///
+/// Lanza ArgumentException si los datos no sirven, para que el endpoint
+/// responda 400 con el motivo en vez de dejar que SUNAT lo rechace después.
+/// </summary>
+static void AplicarDetraccion(Factura factura, DetraccionDto datos)
+{
+    var totales = CalculadoraTotales.Calcular(factura);
+
+    factura.Detraccion = new Detraccion(
+        datos.TipoOperacion,
+        datos.CodigoBienServicio,
+        datos.Porcentaje,
+
+        // Si el cliente no manda el monto, se calcula.
+        //
+        // Es lo habitual: el porcentaje lo sabe, pero el redondeo al entero
+        // que hace el Banco de la Nación no tiene por qué conocerlo.
+        datos.Monto ?? Detraccion.CalcularMonto(
+            totales.ImporteTotal, datos.Porcentaje),
+
+        datos.CuentaBancoNacion,
+        datos.MedioDePago);
+
+    var problemas = factura.Detraccion.Revisar(totales.ImporteTotal, factura.Moneda);
+
+    // Los avisos empiezan por "Aviso:" y NO impiden emitir.
+    //
+    // El del umbral de 700 soles es uno: hay operaciones que se detraen
+    // igualmente por acuerdo o régimen especial. Bloquearlo haría que el
+    // sistema decidiera por el contribuyente en un asunto que es suyo.
+    var errores = problemas.Where(p => !p.StartsWith("Aviso:")).ToList();
+
+    if (errores.Count > 0)
+        throw new ArgumentException(string.Join(" ", errores));
 }

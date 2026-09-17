@@ -28,8 +28,14 @@ public static class GeneradorFacturaXml
             new XElement(Ns.Cbc + "IssueDate", f.FechaEmision.ToString("yyyy-MM-dd", Inv)),
             new XElement(Ns.Cbc + "IssueTime", f.FechaEmision.ToString("HH:mm:ss", Inv)),
 
+            // EL TIPO DE OPERACIÓN VA COMO ATRIBUTO listID.
+            //
+            // Es lo que le dice a SUNAT que esta factura está sujeta a
+            // detracción. Sin él, los bloques de detracción se ignoran y la
+            // factura sale como una venta normal, sin que nadie lo note hasta
+            // que el cliente reclame el depósito que nunca llegó.
             new XElement(Ns.Cbc + "InvoiceTypeCode",
-                new XAttribute("listID", f.TipoOperacion),
+                new XAttribute("listID", f.TipoOperacionEfectivo),
                 new XAttribute("listAgencyName", "PE:SUNAT"),
                 new XAttribute("listName", "Tipo de Documento"),
                 new XAttribute("listURI", CatalogoUri.C01_TipoDocumento),
@@ -37,16 +43,32 @@ public static class GeneradorFacturaXml
 
             LeyendaImporte(totales.ImporteTotal, f.Moneda),
 
+            // La leyenda que SUNAT exige en toda factura con detracción.
+            //
+            // El texto debe ser exactamente el del catálogo 15: sin ella, la
+            // factura se rechaza.
+            LeyendaDetraccion(f.Detraccion),
+
             new XElement(Ns.Cbc + "DocumentCurrencyCode", f.Moneda),
 
             Signature(f),
             Emisor(f.Emisor),
             Receptor(f.Receptor),
 
+            // La cuenta donde se deposita la detracción.
+            //
+            // EL ORDEN IMPORTA: PaymentMeans antes que PaymentTerms. El XSD
+            // define una secuencia, y al revés el documento no valida con un
+            // error que habla de estructura y no menciona la detracción.
+            MediosDePagoDetraccion(f.Detraccion),
+
             // La forma de pago es obligatoria en facturas.
             new XElement(Ns.Cac + "PaymentTerms",
                 new XElement(Ns.Cbc + "ID", "FormaPago"),
                 new XElement(Ns.Cbc + "PaymentMeansID", f.FormaPago)),
+
+            // Cuánto se detrae y por qué concepto.
+            CondicionesDetraccion(f.Detraccion),
 
             // Solo aparece si la factura no está en soles.
             TipoDeCambio(f.TipoCambio),
@@ -59,6 +81,71 @@ public static class GeneradorFacturaXml
             raiz.Add(Linea("InvoiceLine", "InvoicedQuantity", f.Moneda, linea));
 
         return new XDocument(new XDeclaration("1.0", "UTF-8", null), raiz);
+    }
+
+    private static XElement? LeyendaDetraccion(Detraccion? d) =>
+        d is null ? null : new XElement(Ns.Cbc + "Note",
+            new XAttribute("languageLocaleID", Detraccion.CodigoLeyenda),
+            new XCData(Detraccion.TextoLeyenda));
+
+    // --------------------------------------------------------- detracción
+
+    /// <summary>
+    /// El bloque con la cuenta del Banco de la Nación.
+    ///
+    /// Devuelve null cuando no hay detracción, y XElement admite nulos sin
+    /// añadir nada: así el bloque desaparece del documento en vez de quedar
+    /// vacío, que SUNAT rechazaría.
+    /// </summary>
+    private static XElement? MediosDePagoDetraccion(Detraccion? d)
+    {
+        if (d is null) return null;
+
+        return new XElement(Ns.Cac + "PaymentMeans",
+
+            // El identificador literal "Detraccion" es lo que SUNAT busca
+            // para reconocer el bloque. No es un nombre nuestro.
+            new XElement(Ns.Cbc + "ID", "Detraccion"),
+
+            new XElement(Ns.Cbc + "PaymentMeansCode",
+                new XAttribute("listName", "Medio de pago"),
+                new XAttribute("listAgencyName", "PE:SUNAT"),
+                new XAttribute("listURI",
+                    "urn:pe:gob:catalogo:cpe:codigo:catalogo59"),
+                d.MedioDePago),
+
+            new XElement(Ns.Cac + "PayeeFinancialAccount",
+                new XElement(Ns.Cbc + "ID", d.CuentaBancoNacion)));
+    }
+
+    /// <summary>El bloque con el código, el porcentaje y el monto.</summary>
+    private static XElement? CondicionesDetraccion(Detraccion? d)
+    {
+        if (d is null) return null;
+
+        return new XElement(Ns.Cac + "PaymentTerms",
+            new XElement(Ns.Cbc + "ID", "Detraccion"),
+
+            // PaymentMeansID NO ADMITE listName, listAgencyName ni listURI.
+            //
+            // Se los puse por analogía con otros elementos del documento, que
+            // sí los llevan, y el XSD los rechazó con un error que nombra el
+            // atributo exacto.
+            //
+            // En UBL cada elemento tiene su propio conjunto de atributos
+            // permitidos: las analogías no valen.
+            new XElement(Ns.Cbc + "PaymentMeansID", d.CodigoBienServicio),
+
+            new XElement(Ns.Cbc + "PaymentPercent",
+                d.Porcentaje.ToString("0.00", Inv)),
+
+            // SIEMPRE EN SOLES, aunque la factura esté en dólares.
+            //
+            // Lo exige la regla 3208, y tiene sentido: la cuenta del Banco de
+            // la Nación es en soles y ahí se deposita.
+            new XElement(Ns.Cbc + "Amount",
+                new XAttribute("currencyID", "PEN"),
+                d.Monto.ToString("0.00", Inv)));
     }
 }
 

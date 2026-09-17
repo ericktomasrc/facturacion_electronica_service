@@ -73,6 +73,22 @@ public class Factura : ComprobanteBase
 
     /// <summary>"Contado" o "Credito". Obligatorio en facturas.</summary>
     public string FormaPago { get; set; } = "Contado";
+
+    /// <summary>
+    /// Datos de la detracción, cuando la operación está sujeta al SPOT.
+    ///
+    /// CUANDO NO ES NULL CAMBIA CUATRO COSAS en el XML: el tipo de operación
+    /// pasa a 1001-1004, aparece un bloque PaymentMeans con la cuenta del
+    /// Banco de la Nación, otro PaymentTerms con el código y el monto, y se
+    /// añade la leyenda obligatoria.
+    ///
+    /// El TipoOperacion de arriba se ignora: manda el de la detracción.
+    /// </summary>
+    public Detraccion? Detraccion { get; set; }
+
+    /// <summary>El tipo de operación que de verdad viaja al XML.</summary>
+    public string TipoOperacionEfectivo =>
+        Detraccion?.TipoOperacion ?? TipoOperacion;
 }
 
 public class Boleta : ComprobanteBase
