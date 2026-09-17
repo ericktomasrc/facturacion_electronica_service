@@ -205,6 +205,11 @@ builder.Services.AddSwaggerGen(opciones =>
     });
 });
 
+builder.Services.AddSingleton(proveedor =>
+    new RepositorioGuias(
+        proveedor.GetRequiredService<FabricaSesiones>(),
+        cadenaOperador));
+
 var app = builder.Build();
 
 // Comprobar el almacén AL ARRANCAR, no al primer uso.
@@ -291,6 +296,7 @@ app.MapearWebhooks();
 app.MapearConsultas();
 app.MapearNotas();
 app.MapearDescargas();
+app.MapearGuias();
 
 app.MapGet("/health", () => Results.Ok(new { estado = "vivo" }))
    .WithName("Salud")

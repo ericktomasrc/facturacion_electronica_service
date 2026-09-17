@@ -105,5 +105,13 @@ builder.Services.AddSingleton<IHostedService>(proveedor =>
         TimeSpan.FromSeconds(
             builder.Configuration.GetValue("Resumenes:IntervaloSegundos", 60))));
 
+builder.Services.AddSingleton(proveedor =>
+    new RepositorioGuias(
+        proveedor.GetRequiredService<FabricaSesiones>(),
+        cadenaOperador));
+
+builder.Services.AddSingleton<ProcesadorGuias>();
+builder.Services.AddHostedService<ServicioGuias>();
+
 var host = builder.Build();
 host.Run();

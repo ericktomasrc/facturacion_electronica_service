@@ -232,7 +232,7 @@ public sealed class GuiaRemision
                 "La serie de una guía de remitente debe empezar por T y tener " +
                 "cuatro caracteres, como T001. Lo exige SUNAT.");
 
-        if (Correlativo <= 0)
+        if (Correlativo < 0)
             problemas.Add("El correlativo debe ser mayor que cero.");
 
         if (FechaTraslado.Date < FechaEmision.Date)

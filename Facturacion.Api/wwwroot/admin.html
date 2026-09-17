@@ -725,6 +725,8 @@ function vistaSeries() {
           <option value="03">Boleta</option>
           <option value="07">Nota de crédito</option>
           <option value="08">Nota de débito</option>
+          <option value="09">Guía de remisión (remitente)</option>
+          <option value="31">Guía de remisión (transportista)</option>
         </select></label>
       <label>Serie<input id="s-serie" maxlength="4" placeholder="F001">
         <div class="err" id="e-serie"></div></label>
@@ -1362,8 +1364,17 @@ async function reintentarEntrega(id) {
   } catch (e) { avisar(e.message, e.detalle, "mal"); }
 }
 
-const nombreTipo = t =>
-  ({ "01":"Factura", "03":"Boleta", "07":"Nota de crédito", "08":"Nota de débito" }[t] || t);
+    const nombreTipo = t => ({
+        "01": "Factura",
+        "03": "Boleta",
+        "07": "Nota de crédito",
+        "08": "Nota de débito",
+
+        // Las guías usan series con prefijo obligatorio: T para el remitente y
+        // V para el transportista. Lo impone SUNAT, no es una convención nuestra.
+        "09": "Guía de remisión (remitente)",
+        "31": "Guía de remisión (transportista)"
+    }[t] || t);
 
 // ----------------------------------------------------------------- acciones
 

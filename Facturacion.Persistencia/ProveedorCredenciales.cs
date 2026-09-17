@@ -227,6 +227,84 @@ public sealed class ProveedorCredenciales
     // Dapper no materializa bien un struct envuelto en Nullable: devuelve
     // null aunque la fila exista, y sin lanzar ningún error. El fallo aparece
     // como "no se encontró" cuando en realidad sí estaba.
+    /// <summary>
+    /// Credenciales de la API de guías de remisión.
+    ///
+    /// SON DISTINTAS DE LAS DE FACTURAS. El client_id y el client_secret los
+    /// genera el contribuyente en su menú SOL, opción "Credenciales de API
+    /// SUNAT", y solo sirven para guías. El usuario y la clave SOL se
+    /// comparten con las facturas.
+    ///
+    /// Una empresa que emita ambas cosas tendrá los dos juegos.
+    /// </summary>
+    public async Task<ConfiguracionGre> ObtenerGreAsync(
+        Guid tenantId, CancellationToken ct = default)
+    {
+        await using var conexion = new NpgsqlConnection(_cadenaOperador);
+        await conexion.OpenAsync(ct);
+
+        var fila = await conexion.QuerySingleOrDefaultAsync<FilaGre>(
+            new CommandDefinition(
+                """
+                SELECT ruc                       AS "Ruc",
+                       ambiente                  AS "Ambiente",
+                       gre_habilitado            AS "Habilitado",
+                       gre_client_id             AS "ClientId",
+                       gre_client_secret_cifrado AS "SecretoCifrado",
+                       usuario_sol               AS "UsuarioSol",
+                       clave_sol_cifrada         AS "ClaveCifrada",
+                       activo                    AS "Activo"
+                  FROM tenants
+                 WHERE id = @tenantId
+                """,
+                new { tenantId }, cancellationToken: ct));
+
+        if (fila is null)
+            throw new InvalidOperationException("El emisor no existe.");
+
+        if (!fila.Activo)
+            throw new InvalidOperationException(
+                "El emisor está desactivado. Sus guías no deben enviarse.");
+
+        if (fila.Ambiente != "produccion")
+            return ConfiguracionGre.Beta(fila.Ruc);
+
+        // --- Producción ---
+
+        if (!fila.Habilitado)
+            throw new InvalidOperationException(
+                "Esta empresa no está habilitada para emitir guías. " +
+                "Actívalo en el panel tras cargar sus credenciales de API.");
+
+        if (string.IsNullOrWhiteSpace(fila.ClientId) ||
+            fila.SecretoCifrado is null || fila.SecretoCifrado.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "Faltan las credenciales de API para guías. El contribuyente " +
+                "debe generarlas en su menú SOL, opción 'Credenciales de API " +
+                "SUNAT', y cargarlas en el panel.");
+        }
+
+        if (string.IsNullOrWhiteSpace(fila.UsuarioSol) ||
+            fila.ClaveCifrada is null || fila.ClaveCifrada.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "Faltan las credenciales SOL, que las guías también necesitan.");
+        }
+
+        return ConfiguracionGre.Produccion(
+            fila.Ruc,
+            fila.ClientId!,
+            _protector.DesprotegerTexto(fila.SecretoCifrado),
+            fila.UsuarioSol!,
+            _protector.DesprotegerTexto(fila.ClaveCifrada));
+    }
+
+    private sealed record FilaGre(
+        string Ruc, string Ambiente, bool Habilitado,
+        string? ClientId, byte[]? SecretoCifrado,
+        string? UsuarioSol, byte[]? ClaveCifrada, bool Activo);
+
     private sealed record FilaCredenciales(
         string Ruc, string Ambiente, string? UsuarioSol,
         byte[]? ClaveCifrada, bool Activo);
