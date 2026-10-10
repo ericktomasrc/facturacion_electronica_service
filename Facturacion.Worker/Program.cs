@@ -1,3 +1,4 @@
+using Facturacion.Cpe;
 using Facturacion.Persistencia;
 using Facturacion.Worker;
 using Microsoft.Extensions.Logging;
@@ -82,6 +83,14 @@ builder.Services.AddHostedService<ServicioWorker>();
 builder.Services.AddSingleton(new RepositorioResumenes(cadenaOperador));
 builder.Services.AddSingleton<ProcesadorResumenes>();
 
+builder.Services.AddSingleton(proveedor =>
+    new RepositorioBajas(
+        proveedor.GetRequiredService<FabricaSesiones>(),
+        cadenaOperador));
+
+builder.Services.AddSingleton<ProcesadorBajas>();
+builder.Services.AddHostedService<ServicioBajas>();
+
 // --- Webhooks --------------------------------------------------------------
 //
 // Van en su propio servicio porque su fallo NO debe afectar a la facturación:
@@ -113,5 +122,26 @@ builder.Services.AddSingleton(proveedor =>
 builder.Services.AddSingleton<ProcesadorGuias>();
 builder.Services.AddHostedService<ServicioGuias>();
 
+// LA RUTA POR DEFECTO ES LA CARPETA DEL PROPIO EJECUTABLE, y así no hay que
+// configurarla en ningún ambiente: los esquemas se copian al compilar y
+// están donde corre el proceso, sea tu máquina o un contenedor.
+//
+// La variable de entorno queda solo por si algún día hace falta apuntar a
+// otro sitio.
+ValidacionPrevia.Ruta = ConfiguracionSecretos.Opcional(
+    "FACTURACION_XSD_RUTA",
+    Path.Combine(AppContext.BaseDirectory, "xsd"));
+
+ValidacionPrevia.Bloquea = ConfiguracionSecretos
+    .Opcional("FACTURACION_XSD_BLOQUEA", "false")
+    .Equals("true", StringComparison.OrdinalIgnoreCase);
+
 var host = builder.Build();
+
+// SE DICE AL ARRANCAR QUÉ SE VA A COMPROBAR Y QUÉ NO. El modo de fallo de
+// esto es el silencio: si la ruta está mal, no valida nada y nadie se entera.
+host.Services.GetRequiredService<ILoggerFactory>()
+    .CreateLogger("ValidacionPrevia")
+    .LogInformation("{Diagnostico}", ValidacionPrevia.Diagnostico());
+
 host.Run();

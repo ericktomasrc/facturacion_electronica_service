@@ -326,11 +326,11 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
 
             var pista = codigoHttp switch
             {
-                429        => "SUNAT está limitando las peticiones: llegan demasiadas seguidas.",
-                >= 500     => "SUNAT devolvió un error de servidor.",
-                404        => "La URL del servicio no existe. Revisa el endpoint.",
+                429 => "SUNAT está limitando las peticiones: llegan demasiadas seguidas.",
+                >= 500 => "SUNAT devolvió un error de servidor.",
+                404 => "La URL del servicio no existe. Revisa el endpoint.",
                 401 or 403 => "Credenciales rechazadas.",
-                _          => "Respuesta inesperada."
+                _ => "Respuesta inesperada."
             };
 
             error = $"{pista} HTTP {codigoHttp}. Recibido: {recorte}";
@@ -357,6 +357,50 @@ public class EnviadorSunatSoap : IEnviadorCpe, IDisposable
         var numero = codigo.Contains('.')
             ? codigo[(codigo.LastIndexOf('.') + 1)..]
             : codigo;
+
+        // Y AQUÍ VA UN RECORTE QUE PARECE PARANOIA Y NO LO ES.
+        //
+        // La columna codigo_sunat de la base es varchar(10). Un fault normal
+        // trae un número de cuatro cifras y cabe de sobra, pero no todos los
+        // servicios de SUNAT responden igual: algunos devuelven un faultcode
+        // SIN punto, del tipo "soap-env:Client", y entonces esto se lleva los
+        // quince caracteres enteros.
+        //
+        // El resultado es un 22001 de PostgreSQL —"value too long"— que se
+        // registra como "error al procesar" y deja el comprobante colgado. El
+        // mensaje de SUNAT, que es lo único que explicaba qué pasó de verdad,
+        // se pierde con él.
+        //
+        // Costó un rato encontrarlo, porque el error que se ve no tiene nada
+        // que ver con el error que hubo.
+        if (numero.Length > 10)
+            numero = numero[..10];
+
+        // Y ADEMÁS HAY SERVICIOS QUE REPARTEN LOS DOS CAMPOS AL REVÉS.
+        //
+        // El de facturas manda faultcode="soap-env:Client.2335" y el texto en
+        // faultstring. El de otros CPE —retención y percepción— manda
+        // faultcode="soap-env:Client", a secas, y el CÓDIGO en el faultstring:
+        //
+        //   <faultcode>soap-env:Client</faultcode>
+        //   <faultstring>0306</faultstring>
+        //
+        // Sin esto, el comprobante quedaba registrado con código
+        // "soap-env:C" y mensaje "0306", que es exactamente lo contrario de
+        // lo que significan esos dos campos.
+        var limpio = mensaje.Trim();
+
+        if (!numero.All(char.IsDigit) &&
+            limpio.Length is >= 3 and <= 6 &&
+            limpio.All(char.IsDigit))
+        {
+            numero = limpio;
+
+            mensaje =
+                $"SUNAT rechazo el documento con el codigo {numero} y sin " +
+                $"descripcion. El 0306 significa que el XML no valida contra " +
+                $"el esquema del documento.";
+        }
 
         return new ResultadoEnvio(false, numero, mensaje, [], null, null)
         {

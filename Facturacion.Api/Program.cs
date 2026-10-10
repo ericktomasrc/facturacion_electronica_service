@@ -69,6 +69,12 @@ builder.Services.AddSingleton(proveedor =>
         proveedor.GetRequiredService<FabricaSesiones>(),
         cadenaOperador));
 
+// La baja escribe en la misma tabla que los resúmenes, con tipo 'RA'.
+builder.Services.AddSingleton(proveedor =>
+    new RepositorioBajas(
+        proveedor.GetRequiredService<FabricaSesiones>(),
+        cadenaOperador));
+
 // --- Correo ----------------------------------------------------------------
 //
 // Las credenciales son secretos y salen del .env, como todo lo demás. Si no
@@ -276,6 +282,11 @@ app.MapearConsultas();
 app.MapearNotas();
 app.MapearDescargas();
 app.MapearGuias();
+app.MapearLiquidaciones();
+app.MapearRetencionPercepcion();
+app.MapearBajas();
+app.MapearAnulacionBoletas();
+app.MapearEstadoSunat();
 
 app.MapGet("/health", () => Results.Ok(new { estado = "vivo" }))
    .WithName("Salud")
@@ -300,6 +311,7 @@ app.MapPost("/v1/comprobantes", async (
     HttpContext contexto,
     ContextoEmisor emisor,
     RepositorioComprobantes repositorio,
+    ILogger<Program> registro,
     CancellationToken ct) =>
 {
     var tenant = emisor.Exigir();
@@ -336,6 +348,43 @@ app.MapPost("/v1/comprobantes", async (
             "fiscal, como las boletas."));
     }
 
+    // Los anticipos, de momento, solo en facturas.
+    //
+    // SUNAT sí los admite en boletas, pero las boletas viajan por resumen
+    // diario, que es otro formato con sus propias reglas y que no hemos
+    // probado con anticipos. Rechazarlo es más honesto que aceptarlo y
+    // emitir un comprobante donde el anticipo no aparece por ningún lado.
+    if (peticion.Anticipos.Count > 0 && peticion.Tipo != TipoComprobante.Factura)
+    {
+        return Results.BadRequest(new RespuestaError(
+            "Los anticipos solo están implementados en facturas.",
+            "Las boletas viajan por resumen diario, y ese camino todavía no " +
+            "declara anticipos."));
+    }
+
+    // La percepción, por lo mismo que los anticipos.
+    if (peticion.Percepcion is not null && peticion.Tipo != TipoComprobante.Factura)
+    {
+        return Results.BadRequest(new RespuestaError(
+            "La percepción solo está implementada en facturas.",
+            "Las boletas viajan por resumen diario, y ese camino todavía no " +
+            "declara percepción."));
+    }
+
+    // Las cuotas de crédito, lo mismo.
+    //
+    // SUNAT solo las exige cuando el receptor tiene RUC, y una boleta nunca
+    // lo tiene, así que en rigor no harían falta. Pero el resumen diario no
+    // las declara, y aceptarlas para después perderlas es peor que decir
+    // que no están.
+    if (peticion.Cuotas.Count > 0 && peticion.Tipo != TipoComprobante.Factura)
+    {
+        return Results.BadRequest(new RespuestaError(
+            "Las cuotas de crédito solo están implementadas en facturas.",
+            "Las boletas viajan por resumen diario, y ese formato no declara " +
+            "cuotas."));
+    }
+
     // --- Construcción del comprobante ---
     // El emisor sale del tenant, NUNCA de la petición.
 
@@ -348,6 +397,100 @@ app.MapPost("/v1/comprobantes", async (
     catch (ArgumentException ex)
     {
         return Results.BadRequest(new RespuestaError("Datos inválidos.", ex.Message));
+    }
+
+    // LOS AVISOS DE PLAZO NO BLOQUEAN, PERO TIENEN QUE VERSE.
+    //
+    // Facturar el lunes una venta del sábado es legítimo y frecuente. Lo que
+    // no puede pasar es que nadie sepa que ese comprobante vence hoy, porque
+    // si el envío falla no hay segunda oportunidad: SUNAT lo rechaza con el
+    // 2108 y queda emitido sin declarar.
+    foreach (var aviso in ReglasFechaEmision.Avisos(comprobante)
+                 .Concat(ReglasIsc.Avisos(comprobante))
+                 .Concat(comprobante is Factura fx
+                     ? ReglasHidrobiologicos.Revisar(fx)
+                         .Where(p => p.StartsWith("Aviso:"))
+                     : []))
+        registro.LogWarning("{Serie}: {Aviso}", peticion.Serie, aviso);
+
+
+    // --- Los anticipos tienen que existir de verdad ---
+    //
+    // SUNAT valida esto con las reglas 3218 y 3219, pero solo en producción:
+    // en beta su listado de comprobantes está vacío y acepta cualquier
+    // número inventado. Lo comprobamos aquí mientras el anticipo lo haya
+    // emitido este mismo contribuyente, que es el caso normal.
+    //
+    // Si lo emitió otro RUC, SUNAT admite el caso y nosotros no tenemos
+    // forma de verificarlo: se deja pasar y que decida SUNAT.
+
+    foreach (var anticipo in peticion.Anticipos)
+    {
+        if (anticipo.RucEmisor != tenant.Ruc) continue;
+
+        var partes = (anticipo.Numero ?? "").Split('-');
+
+        if (partes.Length != 2 || !int.TryParse(partes[1], out var correlativoPrevio))
+        {
+            return Results.BadRequest(new RespuestaError(
+                "El número del comprobante de anticipo no es válido.",
+                $"'{anticipo.Numero}' debería tener la forma SERIE-CORRELATIVO."));
+        }
+
+        // CATÁLOGO 12 → CATÁLOGO 01, Y NO SON EL MISMO NÚMERO.
+        //
+        // En el bloque de anticipos, "02" significa factura. En nuestra base
+        // la factura es "01". Buscar por "02" no encontraría nada, y el
+        // error acusaría al usuario de algo que hizo bien.
+        var tipoEnLaBase = anticipo.TipoComprobante == TipoComprobanteAnticipo.Factura
+            ? TipoComprobante.Factura
+            : TipoComprobante.Boleta;
+
+        var previo = await repositorio.BuscarPorNumeroAsync(
+            tenant.Id, tipoEnLaBase, partes[0], correlativoPrevio, ct);
+
+        if (previo is null)
+        {
+            return Results.BadRequest(new RespuestaError(
+                "El comprobante del anticipo no existe.",
+                $"No se encontró {anticipo.Numero} entre los comprobantes de " +
+                "este emisor. SUNAT lo rechazaría con el error 3218."));
+        }
+
+        if (previo.Estado is not ("ACEPTADO" or "ACEPTADO_CON_OBSERVACIONES"))
+        {
+            return Results.BadRequest(new RespuestaError(
+                "El comprobante del anticipo todavía no fue aceptado.",
+                $"{anticipo.Numero} está en estado {previo.Estado}. Solo se " +
+                "puede descontar un anticipo que SUNAT ya aceptó (error 3219)."));
+        }
+
+        if (previo.Moneda != peticion.Moneda)
+        {
+            return Results.BadRequest(new RespuestaError(
+                "El anticipo está en otra moneda.",
+                $"{anticipo.Numero} se emitió en {previo.Moneda} y esta factura " +
+                $"está en {peticion.Moneda}. SUNAT exige la misma moneda en " +
+                "todo el documento."));
+        }
+
+        // SE PUEDE DESCONTAR MENOS, NUNCA MÁS.
+        //
+        // Aplicar solo una parte del anticipo es legítimo: un adelanto grande
+        // puede repartirse entre dos entregas. Declarar más de lo que aquella
+        // factura cobró no lo es nunca.
+        //
+        // Esta comprobación atrapa de paso el error más común del módulo:
+        // mandar el monto SIN IGV. Como sale un 18% por debajo, no salta
+        // aquí — pero si alguien manda el valor con IGV de una factura que
+        // no lo llevaba, sí.
+        if (anticipo.MontoTotal > previo.ImporteTotal)
+        {
+            return Results.BadRequest(new RespuestaError(
+                "El anticipo declara más de lo que su factura cobró.",
+                $"{anticipo.Numero} se emitió por {previo.ImporteTotal:0.00} y " +
+                $"aquí se declaran {anticipo.MontoTotal:0.00}."));
+        }
     }
 
     // --- Persistencia ---
@@ -388,7 +531,45 @@ app.MapPost("/v1/comprobantes", async (
     "Envía la cabecera Idempotency-Key para que un reintento no produzca un duplicado: " +
     "si la clave ya se usó, responde 200 con el comprobante original.\n\n" +
     "**Detracción:** si la operación está sujeta al SPOT, incluye el objeto " +
-    "`detraccion`. El monto se calcula solo si no lo envías.")
+    "`detraccion`. El monto se calcula solo si no lo envías.\n\n" +
+    "**Percepción:** solo si el emisor es agente de percepción designado, y " +
+    "solo al contado. El importe total del comprobante sale SIN percepción: " +
+    "el total con percepción viaja en un bloque aparte del XML.\n\n" +
+    "**Crédito:** si la forma de pago es `Credito` y el receptor tiene RUC, " +
+    "hay que enviar al menos una cuota en `cuotas`, con su monto y su fecha " +
+    "de vencimiento. SUNAT lo exige desde 2022.\n\n" +
+    "**Operaciones gratuitas:** lo que se entrega sin cobrar va en su propia " +
+    "línea, con su valor referencial en `valorUnitario` y el código que " +
+    "corresponda en `tipoAfectacionIgv` — el más habitual es `15`, " +
+    "bonificaciones. No suman al importe total: el cliente paga lo mismo. " +
+    "El IGV de esas líneas sí se declara, y lo asume el emisor.\n\n" +
+    "**Cargos y descuentos globales:** en `cargosGlobales`, con el código " +
+    "del catálogo 53 — `50` cargo, `03` descuento, `45` FISE, `46` recargo " +
+    "al consumo. Esos cuatro no generan IGV ni entran en el valor de venta: " +
+    "solo mueven el importe a pagar.\n\n" +
+    "El `49` es la excepción: SÍ se suma a la base imponible y genera su " +
+    "propio IGV. Para un descuento que reduzca el IGV, usa " +
+    "`descuentoGlobalPorcentaje`.\n\n" +
+    "**Detracción de pesca:** con `tipoOperacion` `1002` y código de bien " +
+    "`004`, hay que enviar el bloque `hidrobiologicos` con los seis datos " +
+    "del desembarque. SUNAT los cruza contra el parte de descarga.\n\n" +
+    "**Retenciones:** `62` retención del IGV, que es informativa y no mueve " +
+    "el importe total; `63` retención de renta de segunda categoría, que sí " +
+    "resta. La `62` necesita `baseImponible` y `porcentaje`.\n\n" +
+    "**ICBPER:** las bolsas de plástico van en su propia línea con " +
+    "`afectoIcbper: true`. La cantidad de esa línea es el número de bolsas. " +
+    "La tasa sale sola de la fecha de emisión —0.50 soles por bolsa desde " +
+    "2023— y este impuesto SÍ sube el importe total.\n\n" +
+    "**IVAP (arroz pilado):** afectación `17` en las líneas. Sustituye al " +
+    "IGV con una tasa del 4%, y es excluyente: si una línea lo lleva, todas " +
+    "tienen que llevarlo. No hace falta enviar `porcentajeIgv`.\n\n" +
+    "**Plazo:** SUNAT da 3 días calendario para que una factura le llegue, " +
+    "y 7 para una boleta. Pasado el plazo la rechaza con el error 2108 y el " +
+    "correlativo se pierde, así que una petición con `fechaEmision` vencida " +
+    "se rechaza aquí mismo.\n\n" +
+    "**ISC:** en la línea, con `sistemaIsc` (catálogo 08) y `tasaIsc`. " +
+    "A diferencia de los demás impuestos, el ISC **entra en la base del " +
+    "IGV**: con 1000 de valor y 10% de ISC, el IGV sale sobre 1100.")
 .Produces<RespuestaComprobante>(StatusCodes.Status202Accepted)
 .Produces<RespuestaComprobante>(StatusCodes.Status200OK)
 .Produces<RespuestaError>(StatusCodes.Status400BadRequest)
@@ -515,6 +696,29 @@ static ComprobanteBase ConstruirComprobante(
         Direccion = peticion.Receptor.Direccion
     };
 
+    // EL RECEPTOR SE REVISA LO PRIMERO, y antes de gastar un correlativo.
+    //
+    // Un RUC con el digito verificador cambiado no existe, y la factura
+    // emitida a ese numero hay que anularla con una nota de credito. Eso
+    // cuesta mas que este if.
+    var problemasReceptor = ReglasReceptor.Errores(receptor);
+
+    if (problemasReceptor.Count > 0)
+        throw new ArgumentException(string.Join(" ", problemasReceptor));
+
+    if (peticion.Tipo == TipoComprobante.Factura &&
+    !TipoOperacion.EsExportacion(peticion.TipoOperacion ?? "") &&
+    receptor.TipoDocumento != TipoDocIdentidad.Ruc)
+    {
+        throw new ArgumentException(
+            $"Una factura solo se puede emitir a un RUC, y el receptor llego " +
+            $"con documento de tipo '{receptor.TipoDocumento}'. Si el cliente " +
+            $"no tiene RUC, el documento que le corresponde es una boleta de " +
+            $"venta (tipo 03). La unica factura que admite otro documento es " +
+            $"la de exportacion, y esa se declara con tipo de operacion " +
+            $"0200-0208.");
+    }
+
     var lineas = peticion.Lineas.Select((l, indice) => new LineaComprobante
     {
         Numero = indice + 1,
@@ -526,17 +730,44 @@ static ComprobanteBase ConstruirComprobante(
         DescuentoPorcentaje = l.DescuentoPorcentaje,
         TipoAfectacionIgv = l.TipoAfectacionIgv,
         PorcentajeIgv = l.PorcentajeIgv
+            ?? AfectacionIgv.TasaPorDefecto(l.TipoAfectacionIgv),
+        AfectoIcbper = l.AfectoIcbper,
+        IcbperUnitario = l.IcbperUnitario,
+        SistemaIsc = l.SistemaIsc,
+        TasaIsc = l.TasaIsc
     }).ToList();
+
+    // --- Que un dedazo en la afectación dé 400 y no 500 ---------------------
+    //
+    // Un "1O" con la letra O en vez del cero llegaba hasta el cálculo de
+    // totales y reventaba allí con una excepción interna: el cliente de la
+    // API recibía "error del servidor" y no tenía forma de saber qué había
+    // puesto mal.
+    //
+    // Con quince códigos válidos en el catálogo 07 —los cuatro de siempre
+    // más las once gratuitas— el dedazo ya no es raro.
+
+    var afectacionesRaras = lineas
+        .Where(l => !AfectacionIgv.Existe(l.TipoAfectacionIgv))
+        .Select(l => $"la linea {l.Numero} llego con '{l.TipoAfectacionIgv}'")
+        .ToList();
+
+    if (afectacionesRaras.Count > 0)
+    {
+        throw new ArgumentException(
+            "Hay afectaciones de IGV que no existen en el catalogo 07: " +
+            $"{string.Join(", ", afectacionesRaras)}.");
+    }
 
     var tipoCambio = peticion.TipoCambio is null ? null : new TipoCambio
     {
         MonedaOrigen = peticion.TipoCambio.MonedaOrigen,
         MonedaDestino = peticion.TipoCambio.MonedaDestino,
         Tasa = peticion.TipoCambio.Tasa,
-        Fecha = peticion.TipoCambio.Fecha ?? DateTime.Today
+        Fecha = peticion.TipoCambio.Fecha ?? RelojPeru.Hoy
     };
 
-    var fecha = peticion.FechaEmision ?? DateTime.Now;
+    var fecha = peticion.FechaEmision ?? RelojPeru.Ahora;
 
     // LA FACTURA SE CONSTRUYE APARTE porque puede llevar detracción, y eso
     // no cabe en un inicializador: el monto depende de los totales, y los
@@ -549,6 +780,9 @@ static ComprobanteBase ConstruirComprobante(
             FechaEmision = fecha,
             Moneda = peticion.Moneda,
             FormaPago = peticion.FormaPago,
+            TipoOperacion = peticion.TipoOperacion,
+            PaisDeUso = peticion.PaisDeUso,
+            Drawback = peticion.Drawback,
             DescuentoGlobalPorcentaje = peticion.DescuentoGlobalPorcentaje,
             TipoCambio = tipoCambio,
             Emisor = emisor,
@@ -556,13 +790,127 @@ static ComprobanteBase ConstruirComprobante(
             Lineas = lineas
         };
 
+        // LOS CARGOS GLOBALES VAN LOS PRIMEROS, y el orden no es casual:
+        // cambian el importe total, y la detracción, la percepción y las
+        // cuotas se comprueban todas contra ese importe. Copiarlos después
+        // haría que esas tres miraran un total que ya no es el final.
+        factura.CargosGlobales = MapearCargosGlobales(peticion);
+
+        // Las cuotas se copian antes que nada: la revisión de crédito mira
+        // los totales, y los totales no cambian por las cuotas, pero sí las
+        // demás revisiones miran la factura entera.
+        factura.Cuotas = peticion.Cuotas.Select(c => new CuotaCredito
+        {
+            Numero = c.Numero,
+            Monto = c.Monto,
+            FechaVencimiento = c.FechaVencimiento
+        }).ToList();
+
         if (peticion.Detraccion is not null)
             AplicarDetraccion(factura, peticion.Detraccion);
+
+        // Los anticipos se copian ANTES de revisar nada, porque cambian
+        // los totales y las dos revisiones miran totales.
+        factura.Anticipos = peticion.Anticipos.Select(a => new Anticipo
+        {
+            IdentificadorPago = a.IdentificadorPago,
+            TipoComprobante = a.TipoComprobante,
+            Numero = a.Numero,
+            RucEmisor = a.RucEmisor,
+            MontoTotal = a.MontoTotal,
+            FechaPago = a.FechaPago,
+            TipoAfectacion = a.TipoAfectacion,
+            PorcentajeIgv = a.PorcentajeIgv
+        }).ToList();
+
+        if (peticion.Percepcion is not null)
+            AplicarPercepcion(factura, peticion.Percepcion);
+
+        var problemasExportacion = Exportacion.Errores(factura);
+
+        if (problemasExportacion.Count > 0)
+            throw new ArgumentException(string.Join(" ", problemasExportacion));
+
+        var problemasAnticipos = ReglasAnticipos.Errores(factura);
+
+        if (problemasAnticipos.Count > 0)
+            throw new ArgumentException(string.Join(" ", problemasAnticipos));
+
+        var problemasPercepcion = ReglasPercepcion.Errores(factura);
+
+        if (problemasPercepcion.Count > 0)
+            throw new ArgumentException(string.Join(" ", problemasPercepcion));
+
+        var problemasCredito = ReglasCredito.Errores(factura);
+
+        if (problemasCredito.Count > 0)
+            throw new ArgumentException(string.Join(" ", problemasCredito));
+
+        // Las líneas gratuitas y los cargos globales se revisan lo mismo que
+        // en la boleta de más abajo, y por eso están escritos dos veces en
+        // vez de una: la factura sale por su propio return, unas líneas
+        // antes de que exista el comprobante genérico.
+        var problemasGratuitas = Gratuitas.Errores(factura);
+
+        if (problemasGratuitas.Count > 0)
+            throw new ArgumentException(string.Join(" ", problemasGratuitas));
+
+        var problemasCargos = ReglasCargosGlobales.Errores(factura);
+
+        if (problemasCargos.Count > 0)
+            throw new ArgumentException(string.Join(" ", problemasCargos));
+
+        var problemasIcbper = ReglasIcbper.Errores(factura);
+
+        if (problemasIcbper.Count > 0)
+            throw new ArgumentException(string.Join(" ", problemasIcbper));
+
+        var problemasIvap = ReglasIvap.Errores(factura);
+
+        if (problemasIvap.Count > 0)
+            throw new ArgumentException(string.Join(" ", problemasIvap));
+
+        // Los datos del desembarque se copian ANTES de revisar, porque la
+        // revision los mira, y se vuelcan en la primera linea: SUNAT solo
+        // comprueba que cada codigo exista en el comprobante.
+        if (peticion.Hidrobiologicos is { } h)
+        {
+            factura.Hidrobiologicos = new RecursosHidrobiologicos(
+                h.Matricula,
+                h.NombreEmbarcacion,
+                h.TipoEspecie,
+                h.LugarDescarga,
+                h.FechaDescarga,
+                h.CantidadEspecie);
+
+            if (factura.Lineas.Count > 0)
+            {
+                factura.Lineas[0].Propiedades =
+                    factura.Hidrobiologicos.ComoPropiedades().ToList();
+            }
+        }
+
+        var problemasHidro = ReglasHidrobiologicos.Errores(factura);
+
+        if (problemasHidro.Count > 0)
+            throw new ArgumentException(string.Join(" ", problemasHidro));
+
+        var problemasIsc = ReglasIsc.Errores(factura);
+
+        if (problemasIsc.Count > 0)
+            throw new ArgumentException(string.Join(" ", problemasIsc));
+
+        // La fecha, al final: necesita saber el tipo de comprobante, porque
+        // el plazo de una factura no es el de una boleta.
+        var problemasFecha = ReglasFechaEmision.Errores(factura);
+
+        if (problemasFecha.Count > 0)
+            throw new ArgumentException(string.Join(" ", problemasFecha));
 
         return factura;
     }
 
-    return peticion.Tipo switch
+    var comprobante = peticion.Tipo switch
     {
         TipoComprobante.Boleta => new Boleta
         {
@@ -574,14 +922,75 @@ static ComprobanteBase ConstruirComprobante(
             TipoCambio = tipoCambio,
             Emisor = emisor,
             Receptor = receptor,
-            Lineas = lineas
+            Lineas = lineas,
+            CargosGlobales = MapearCargosGlobales(peticion)
         },
 
         _ => throw new ArgumentException(
             $"Tipo de comprobante no soportado por este endpoint: {peticion.Tipo}. " +
             "Las notas de crédito y débito tienen su propia ruta.")
     };
+
+    // Una bonificación en una boleta es tan común como en una factura: el
+    // "llévate 3 y paga 2" de mostrador va casi siempre a consumidor final.
+    //
+    // OJO: esto rechaza lo que está mal, pero las boletas todavía viajan por
+    // resumen diario y ese camino no declara el total de gratuitas. Hasta
+    // que lo haga, las bonificaciones conviene emitirlas en factura.
+    var problemasGratuitasBoleta = Gratuitas.Errores(comprobante);
+
+    if (problemasGratuitasBoleta.Count > 0)
+        throw new ArgumentException(string.Join(" ", problemasGratuitasBoleta));
+
+    // El recargo al consumo es el caso típico de boleta: un restaurante que
+    // cobra el 10% a un consumidor final.
+    var problemasCargosBoleta = ReglasCargosGlobales.Errores(comprobante);
+
+    if (problemasCargosBoleta.Count > 0)
+        throw new ArgumentException(string.Join(" ", problemasCargosBoleta));
+
+    // EL ICBPER ES, SOBRE TODO, UN ASUNTO DE BOLETAS: grava las bolsas que
+    // se entregan a un consumidor final, y el consumidor final compra con
+    // boleta. Que funcione aqui importa mas que en la factura.
+    var problemasIcbperBoleta = ReglasIcbper.Errores(comprobante);
+
+    if (problemasIcbperBoleta.Count > 0)
+        throw new ArgumentException(string.Join(" ", problemasIcbperBoleta));
+
+    var problemasIvapBoleta = ReglasIvap.Errores(comprobante);
+
+    if (problemasIvapBoleta.Count > 0)
+        throw new ArgumentException(string.Join(" ", problemasIvapBoleta));
+
+    var problemasIscBoleta = ReglasIsc.Errores(comprobante);
+
+    if (problemasIscBoleta.Count > 0)
+        throw new ArgumentException(string.Join(" ", problemasIscBoleta));
+
+    var problemasFechaBoleta = ReglasFechaEmision.Errores(comprobante);
+
+    if (problemasFechaBoleta.Count > 0)
+        throw new ArgumentException(string.Join(" ", problemasFechaBoleta));
+
+    return comprobante;
 }
+
+/// <summary>
+/// Pasa los cargos y descuentos globales del DTO al modelo.
+///
+/// Está aparte porque lo usan las dos ramas —factura y boleta— y porque
+/// duplicar un mapeo es la forma más silenciosa de que un campo nuevo se
+/// copie en un sitio y en el otro no.
+/// </summary>
+static List<CargoGlobal> MapearCargosGlobales(PeticionComprobante peticion) =>
+    peticion.CargosGlobales.Select(cg => new CargoGlobal
+    {
+        Codigo = cg.Codigo,
+        Monto = cg.Monto,
+        BaseImponible = cg.BaseImponible,
+        Porcentaje = cg.Porcentaje,
+        Descripcion = cg.Descripcion
+    }).ToList();
 
 /// <summary>
 /// Añade los datos de detracción a una factura ya construida.
@@ -624,4 +1033,50 @@ static void AplicarDetraccion(Factura factura, DetraccionDto datos)
 
     if (errores.Count > 0)
         throw new ArgumentException(string.Join(" ", errores));
+}
+
+/// <summary>
+/// Añade la percepción a una factura ya construida.
+///
+/// SE HACE APARTE, como la detracción, porque necesita el importe total y
+/// el importe total necesita la factura completa.
+///
+/// LA BASE VA SIEMPRE EN SOLES. Si la factura está en otra moneda hay que
+/// convertirla: SUNAT exige la percepción en moneda nacional aunque todo lo
+/// demás del documento esté en dólares. Es la única excepción que admite a
+/// "la moneda debe ser la misma en todo el comprobante".
+/// </summary>
+static void AplicarPercepcion(Factura factura, PercepcionDto datos)
+{
+    if (!RegimenPercepcion.Existe(datos.Regimen))
+    {
+        throw new ArgumentException(
+            $"El regimen de percepcion '{datos.Regimen}' no existe en el " +
+            $"catalogo 22. Solo 01 (venta interna), 02 (combustible) y " +
+            $"03 (agente con tasa especial).");
+    }
+
+    var totales = CalculadoraTotales.Calcular(factura);
+
+    // El importe total, convertido a soles si hace falta.
+    //
+    // La tasa que corresponde es la que YA se declaró en este comprobante,
+    // no otra consultada aparte: si se usara una distinta, el XML diría dos
+    // cosas diferentes sobre el mismo día y el mismo documento.
+    var baseEnSoles = factura.Moneda == "PEN"
+        ? totales.ImporteTotal
+        : CalculadoraTotales.Redondear(
+            totales.ImporteTotal * (factura.TipoCambio?.Tasa ?? 0m));
+
+    var porcentaje = datos.Porcentaje
+        ?? RegimenPercepcion.TasaReferencia(datos.Regimen);
+
+    factura.Percepcion = new Percepcion(
+        datos.Regimen,
+        porcentaje,
+        baseEnSoles,
+
+        // Si el cliente no manda el monto, se calcula. Es lo habitual: el
+        // régimen lo sabe, el redondeo no tiene por qué conocerlo.
+        datos.Monto ?? Percepcion.CalcularMonto(baseEnSoles, porcentaje));
 }

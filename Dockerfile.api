@@ -1,0 +1,111 @@
+# =============================================================================
+# Facturacion.Api
+#
+# Se construye DESDE LA RAIZ DE LA SOLUCION, no desde la carpeta del proyecto:
+#
+#     docker build -f Dockerfile.api -t facturacion-api .
+#
+# Tiene que ser asi porque la API depende de Persistencia, que depende de Cpe,
+# y el contexto de build necesita ver los tres.
+#
+#
+# POR QUE DOS ETAPAS:
+#
+# La imagen del SDK de .NET pesa cerca de 800 MB: trae el compilador, NuGet y
+# las herramientas. Nada de eso hace falta para ejecutar. La segunda etapa
+# parte del runtime, que pesa una cuarta parte, y solo copia lo compilado.
+#
+# En una maquina Always Free con disco contado, eso importa.
+# =============================================================================
+
+# --- Etapa 1: compilar -------------------------------------------------------
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /origen
+
+# LOS .csproj SE COPIAN ANTES QUE EL CODIGO, Y NO ES UN CAPRICHO.
+#
+# Docker cachea cada linea. Si se copiara todo de golpe, cualquier cambio en
+# una linea de C# invalidaria la cache y volveria a descargar los paquetes de
+# NuGet en cada build.
+#
+# Copiando primero solo los .csproj, el `restore` se cachea y solo se repite
+# cuando cambian las dependencias, que es casi nunca.
+
+COPY Facturacion.sln .
+COPY Directory.Build.props .
+COPY Facturacion.Cpe/Facturacion.Cpe.csproj                   Facturacion.Cpe/
+COPY Facturacion.Pdf/Facturacion.Pdf.csproj                   Facturacion.Pdf/
+COPY Facturacion.Persistencia/Facturacion.Persistencia.csproj Facturacion.Persistencia/
+COPY Facturacion.Api/Facturacion.Api.csproj                   Facturacion.Api/
+
+RUN dotnet restore Facturacion.Api/Facturacion.Api.csproj
+
+# Ahora si, el codigo.
+COPY Facturacion.Cpe/          Facturacion.Cpe/
+COPY Facturacion.Pdf/          Facturacion.Pdf/
+COPY Facturacion.Persistencia/ Facturacion.Persistencia/
+COPY Facturacion.Api/          Facturacion.Api/
+
+RUN dotnet publish Facturacion.Api/Facturacion.Api.csproj \
+    -c Release \
+    -o /publicado \
+    --no-restore
+
+
+# --- Etapa 2: ejecutar -------------------------------------------------------
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
+WORKDIR /app
+
+# LAS FUENTES Y LA ZONA HORARIA SE INSTALAN A MANO, y las dos por un motivo
+# que ya nos mordio una vez cada una:
+#
+#   fontconfig + fuentes
+#       QuestPDF dibuja texto y necesita fuentes del sistema. En Windows
+#       estan; en un contenedor Linux no hay ninguna. El PDF falla al
+#       generarse, no al arrancar, asi que el fallo aparece el dia que un
+#       cliente pide su comprobante.
+#
+#   tzdata
+#       Todo el sistema razona en hora de Peru: los plazos de SUNAT, la fecha
+#       de emision, el corte del resumen diario. Sin la base de datos de zonas
+#       horarias, la busqueda de "America/Lima" falla y el proceso no arranca.
+#       Es preferible: fallar al arrancar es mucho mejor que emitir con la
+#       fecha equivocada.
+#
+#   curl
+#       Para el HEALTHCHECK de mas abajo.
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        fontconfig \
+        fonts-dejavu-core \
+        fonts-liberation \
+        tzdata \
+        curl \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV TZ=America/Lima
+
+COPY --from=build /publicado .
+
+# NO CORRE COMO ROOT.
+#
+# Las imagenes de .NET 8 traen el usuario `app` preparado. Un proceso que
+# guarda certificados digitales de terceros no tiene ninguna razon para ser
+# root dentro de su contenedor.
+USER $APP_UID
+
+EXPOSE 8080
+ENV ASPNETCORE_HTTP_PORTS=8080
+
+# EL HEALTHCHECK USA /health A PROPOSITO, que es el unico endpoint que no pide
+# clave. Docker reinicia el contenedor si deja de responder.
+#
+# start-period de 30 s: el arranque comprueba el almacen y crea el primer
+# administrador, y eso tarda.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -fsS http://localhost:8080/health || exit 1
+
+ENTRYPOINT ["dotnet", "Facturacion.Api.dll"]

@@ -132,4 +132,16 @@ public record DatosParaPdf(
     string? CodigoSunat,
     string? MensajeSunat,
     string CpeJson,
-    string? RutaXml);
+    string? RutaXml,
+
+    // La columna `extra` del comprobante, tal como está en la base.
+    //
+    // Son campos propios de la empresa —la orden de compra es el caso
+    // típico— que el estándar de SUNAT no contempla y que NUNCA viajan en
+    // el XML. El papel es el único sitio donde el cliente puede leerlos.
+    //
+    // SI SE AÑADE O SE QUITA UN CAMPO DE ESTE RECORD, hay que tocar también
+    // la consulta de ObtenerParaPdfAsync: Dapper busca un constructor que
+    // encaje con TODAS las columnas devueltas, y si no lo encuentra falla al
+    // pedir el PDF, no al compilar.
+    string? ExtraJson);

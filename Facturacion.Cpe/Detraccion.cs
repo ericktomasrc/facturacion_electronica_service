@@ -47,69 +47,192 @@ public static class TipoOperacionDetraccion
 /// <summary>
 /// Códigos del catálogo 54: qué bien o servicio está sujeto a detracción.
 ///
-/// Se listan los más frecuentes. El catálogo completo tiene más de cuarenta
-/// entradas y cambia con la normativa, así que el motor NO valida contra esta
-/// lista: solo la usa para sugerir y para conocer las tasas habituales.
+/// ESTA TABLA ESTUVO MAL DURANTE MESES, y conviene que quede escrito porque
+/// explica cómo está hecha ahora.
 ///
-/// Validar contra una lista escrita en el código significaría que el día que
-/// SUNAT añada un código, el sistema rechace operaciones legítimas hasta que
-/// alguien recompile.
+/// Nueve de sus veintiséis constantes apuntaban al código equivocado. Entre
+/// ellas había dos inventadas —"019b" y "021b"— que no existen en ningún
+/// catálogo de SUNAT: alguien se encontró con que el 019 y el 021 ya estaban
+/// usados por otra constante (mal asignada, precisamente) y les añadió una
+/// letra para que compilara.
+///
+/// No hizo daño por una única razón: NADIE LA USABA. En toda la solución
+/// aparecía una sola vez, su propia declaración. Si hubiera estado cableada
+/// como validación, habría rechazado detracciones perfectamente válidas.
+///
+/// De ahí la forma que tiene ahora: cada constante lleva al lado la
+/// descripción textual del catálogo. Un nombre en C# puede confundirse —
+/// "minerales metálicos" y "minerales no metálicos" se parecen mucho— pero
+/// la frase de SUNAT al lado hace que un desajuste se vea al leerlo.
+///
+///
+/// NO ES UNA LISTA BLANCA Y NO DEBE SERLO.
+///
+/// Al reconstruirla se consultaron los anexos de SUNAT (R.S. 318-2017 y
+/// 117-2017) y tablas de otros proveedores, Y NO COINCIDEN: los anexos
+/// oficiales van del 001 al 040 y saltan del 026 al 029, sin 027 ni 028 —
+/// que son transporte de carga y de pasajeros, y se usan todos los días en
+/// Perú. El 041 tampoco está, porque es posterior a esos anexos.
+///
+/// Es decir: no se puede determinar con certeza la composición exacta del
+/// catálogo vigente. Validar contra una lista así rechazaría operaciones
+/// legítimas, que es el peor fallo posible en un motor de facturación.
+///
+/// El código de bien viaja tal cual y lo valida SUNAT. Esto sirve para
+/// escribirlo bien, no para impedirlo.
 /// </summary>
 public static class CodigoDetraccion
 {
-    public const string AzucarMelaza = "001";
-    public const string ArrozPilado = "002";
+    // --- Bienes -----------------------------------------------------------
+
+    /// <summary>Azúcar y melaza de caña.</summary>
+    public const string Azucar = "001";
+
+    /// <summary>Alcohol etílico.</summary>
     public const string AlcoholEtilico = "003";
+
+    /// <summary>Recursos hidrobiológicos. El que exige el tipo 1002.</summary>
     public const string RecursosHidrobiologicos = "004";
+
+    /// <summary>Maíz amarillo duro.</summary>
     public const string MaizAmarilloDuro = "005";
+
+    /// <summary>Algodón.</summary>
+    public const string Algodon = "006";
+
+    /// <summary>Caña de azúcar.</summary>
+    public const string CanaDeAzucar = "007";
+
+    /// <summary>Madera.</summary>
     public const string Madera = "008";
+
+    /// <summary>Arena y piedra.</summary>
     public const string ArenaYPiedra = "009";
-    public const string ResiduosMetalicos = "010";
-    public const string CarnesYDespojos = "011";
-    public const string HarinaDeTrigo = "014";
-    public const string OroGravado = "016";
-    public const string MineralesMetalicos = "019";
-    public const string OroYMinerales = "021";
-    public const string MineralesNoMetalicos = "023";
-    public const string TransporteCarga = "027";
-    public const string TransportePasajeros = "028";
+
+    /// <summary>Residuos, subproductos, desechos, recortes y desperdicios.</summary>
+    public const string Residuos = "010";
+
+    /// <summary>Bienes del inciso A) del Apéndice I de la Ley del IGV.</summary>
+    public const string BienesApendiceI = "011";
+
+    /// <summary>Animales vivos.</summary>
+    public const string AnimalesVivos = "013";
+
+    /// <summary>Carnes y despojos comestibles.</summary>
+    public const string CarnesYDespojos = "014";
+
+    /// <summary>Abonos, cueros y pieles de origen animal.</summary>
+    public const string AbonosCuerosYPieles = "015";
+
+    /// <summary>Aceite de pescado.</summary>
+    public const string AceiteDePescado = "016";
+
+    /// <summary>Harina, polvo y pellets de pescado, crustáceos y moluscos.</summary>
+    public const string HarinaDePescado = "017";
+
+    /// <summary>Embarcaciones pesqueras.</summary>
+    public const string EmbarcacionesPesqueras = "018";
+
+    /// <summary>Leche.</summary>
+    public const string Leche = "023";
+
+    /// <summary>Algodón en rama sin desmontar.</summary>
+    public const string AlgodonEnRama = "029";
+
+    /// <summary>Oro gravado con el IGV.</summary>
+    public const string OroGravado = "031";
+
+    /// <summary>Páprika y otros frutos de los géneros capsicum o pimienta.</summary>
+    public const string Paprika = "032";
+
+    /// <summary>Espárragos.</summary>
+    public const string Esparragos = "033";
+
+    /// <summary>Minerales metálicos no auríferos.</summary>
+    public const string MineralesMetalicosNoAuriferos = "034";
+
+    /// <summary>Bienes exonerados del IGV.</summary>
+    public const string BienesExonerados = "035";
+
+    /// <summary>Oro y demás minerales metálicos exonerados del IGV.</summary>
+    public const string OroYMineralesExonerados = "036";
+
+    /// <summary>Minerales no metálicos.</summary>
+    public const string MineralesNoMetalicos = "039";
+
+    /// <summary>Bien inmueble gravado con IGV.</summary>
+    public const string BienInmuebleGravado = "040";
+
+    // --- Servicios --------------------------------------------------------
+
+    /// <summary>Intermediación laboral y tercerización.</summary>
     public const string Intermediacion = "012";
-    public const string ArrendamientoBienes = "019b";
+
+    /// <summary>Arrendamiento de bienes muebles.</summary>
+    public const string ArrendamientoBienes = "019";
+
+    /// <summary>Mantenimiento y reparación de bienes muebles.</summary>
     public const string MantenimientoYReparacion = "020";
-    public const string MovimientoDeCarga = "021b";
+
+    /// <summary>Movimiento de carga.</summary>
+    public const string MovimientoDeCarga = "021";
+
+    /// <summary>Otros servicios empresariales.</summary>
     public const string OtrosServiciosEmpresariales = "022";
-    public const string Comision = "024";
+
+    /// <summary>Comisión mercantil.</summary>
+    public const string ComisionMercantil = "024";
+
+    /// <summary>Fabricación de bienes por encargo.</summary>
     public const string FabricacionPorEncargo = "025";
-    public const string ServicioDeTransportePersonas = "026";
+
+    /// <summary>Servicio de transporte de personas.</summary>
+    public const string TransporteDePersonas = "026";
+
+    /// <summary>Contratos de construcción.</summary>
     public const string ContratosDeConstruccion = "030";
+
+    /// <summary>Demás servicios gravados con el IGV.</summary>
     public const string DemasServiciosGravados = "037";
 
-    /// <summary>
-    /// Tasas habituales, solo como referencia para el panel.
-    ///
-    /// NO SE USAN PARA CALCULAR NI PARA VALIDAR: las tasas cambian por norma
-    /// y quien emite debe saber la suya. Ponerlas como fuente de verdad haría
-    /// que el sistema calculara mal en silencio el día que cambien.
-    /// </summary>
-    public static readonly IReadOnlyDictionary<string, decimal> TasasReferencia =
-        new Dictionary<string, decimal>
-        {
-            ["004"] = 4m,
-            ["008"] = 10m,
-            ["009"] = 10m,
-            ["010"] = 15m,
-            ["011"] = 4m,
-            ["019"] = 10m,
-            ["020"] = 12m,
-            ["021"] = 10m,
-            ["022"] = 12m,
-            ["024"] = 12m,
-            ["025"] = 12m,
-            ["027"] = 4m,
-            ["028"] = 10m,
-            ["030"] = 4m,
-            ["037"] = 12m
-        };
+    // --- Los que no están en los anexos de 2017 ---------------------------
+    //
+    // Están aparte y con este aviso encima a propósito: si algún día uno de
+    // estos deja de funcionar, aquí está la explicación en vez de una
+    // búsqueda de media mañana.
+    //
+    // El 027 y el 028 no aparecen en los anexos oficiales que se consultaron
+    // —saltan del 026 al 029— y sin embargo son los que SUNAT EXIGE para los
+    // tipos de operación 1004 y 1003, como se ve en
+    // TipoOperacionDetraccion.CodigoObligatorio, que sí está en uso y
+    // funciona contra SUNAT.
+    //
+    // El 041 es posterior a esos anexos.
+
+    /// <summary>Servicio de transporte de carga. El que exige el tipo 1004.</summary>
+    public const string TransporteDeCarga = "027";
+
+    /// <summary>Transporte de pasajeros. El que exige el tipo 1003.</summary>
+    public const string TransporteDePasajeros = "028";
+
+    /// <summary>Plomo. Añadido después de los anexos de 2017.</summary>
+    public const string Plomo = "041";
+
+    // --- LAS TASAS SE QUITARON, Y ESO TAMBIÉN ES UNA DECISIÓN -------------
+    //
+    // Aquí había un diccionario TasasReferencia con quince porcentajes,
+    // "solo como referencia para el panel". No lo usaba nadie, y al
+    // contrastarlo con las fuentes tampoco coincidía: madera al 10% en un
+    // sitio y al 4% en otro, comisión mercantil al 12% y al 10%, fabricación
+    // por encargo igual. Las tasas del SPOT se han modificado varias veces y
+    // no hay forma de saber desde el código cuál rige hoy.
+    //
+    // Un número que no se puede respaldar es peor que ningún número: alguien
+    // lo va a copiar a una factura creyendo que es la tasa vigente.
+    //
+    // Quien emite sabe su tasa, y va en el campo `Porcentaje` de la
+    // detracción. Si algún día el panel quiere sugerirlas, que las lea de una
+    // tabla en la base que se pueda actualizar sin recompilar.
 }
 
 /// <summary>

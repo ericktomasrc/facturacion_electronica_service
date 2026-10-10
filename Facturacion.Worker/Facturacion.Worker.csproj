@@ -16,4 +16,24 @@
     <ProjectReference Include="..\Facturacion.Persistencia\Facturacion.Persistencia.csproj" />
     <ProjectReference Include="..\Facturacion.Pdf\Facturacion.Pdf.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      LOS ESQUEMAS VIAJAN CON EL EJECUTABLE.
+
+      Estaban dentro de Facturacion.Consola, que es un proyecto de pruebas y
+      no se despliega. Dejarlos ahí habría hecho que la validación funcionara
+      en la máquina de desarrollo y callara en producción, que es el peor de
+      los dos mundos: la red parece puesta y no hay nadie debajo.
+
+      Copiados al directorio de salida, la ruta por defecto
+      (AppContext.BaseDirectory + "xsd") vale igual aquí, en QA y dentro de
+      un contenedor, sin configurar nada en ningún sitio.
+    -->
+    <None Include="..\xsd\**\*.xsd">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <LinkBase>xsd</LinkBase>
+    </None>
+  </ItemGroup>
+
 </Project>

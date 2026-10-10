@@ -33,11 +33,11 @@ var guia = new GuiaRemision
     Serie = "T001",
     Correlativo = 1,
 
-    FechaEmision = DateTime.Today,
+    FechaEmision = RelojPeru.Hoy,
 
     // El traslado empieza mañana. No puede ser anterior a la emisión: la
     // guía se emite ANTES de mover los bienes.
-    FechaTraslado = DateTime.Today.AddDays(1),
+    FechaTraslado = RelojPeru.Hoy.AddDays(1),
 
     Remitente = new Emisor
     {

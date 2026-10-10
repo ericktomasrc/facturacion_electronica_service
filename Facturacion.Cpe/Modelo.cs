@@ -7,7 +7,14 @@ public abstract class ComprobanteBase
 {
     public string Serie { get; set; } = "";
     public int Correlativo { get; set; }
-    public DateTime FechaEmision { get; set; } = DateTime.Now;
+    /// <summary>
+    /// RelojPeru.Ahora, no DateTime.Now.
+    ///
+    /// DateTime.Now da la hora del reloj de la máquina, y en un servidor
+    /// Linux ese reloj está en UTC. Una factura de las 19:00 de Lima se
+    /// fecharía al día siguiente, que para SUNAT es otro periodo tributario.
+    /// </summary>
+    public DateTime FechaEmision { get; set; } = RelojPeru.Ahora;
 
     /// <summary>ISO 4217. "PEN" = soles, "USD" = dólares.</summary>
     public string Moneda { get; set; } = "PEN";
@@ -37,6 +44,26 @@ public abstract class ComprobanteBase
     public Receptor Receptor { get; set; } = new();
     public List<LineaComprobante> Lineas { get; set; } = [];
 
+    /// <summary>
+    /// Anticipos ya facturados que se descuentan de este comprobante.
+    ///
+    /// Vive en la base y no solo en Factura porque una boleta también admite
+    /// anticipos. Las notas de crédito y débito lo dejan vacío.
+    /// </summary>
+    public List<Anticipo> Anticipos { get; set; } = [];
+
+    /// <summary>
+    /// Cargos y descuentos que se aplican al comprobante entero y que NO
+    /// cambian la base imponible del IGV: recargo al consumo, FISE, un
+    /// descuento comercial pactado fuera del precio.
+    ///
+    /// NO CONFUNDIR CON DescuentoGlobalPorcentaje, que está unas líneas más
+    /// arriba y hace lo contrario: aquel sí reduce la base, y por eso se
+    /// reparte dentro de las líneas. Estos van en su propio bloque y solo
+    /// mueven el importe a pagar.
+    /// </summary>
+    public List<CargoGlobal> CargosGlobales { get; set; } = [];
+
     /// <summary>Catálogo 01. Lo define cada tipo concreto.</summary>
     public abstract string TipoComprobante { get; }
 
@@ -61,18 +88,44 @@ public class TipoCambio
     /// <summary>Tasa de conversión. Se declara con 3 decimales.</summary>
     public decimal Tasa { get; set; }
 
-    public DateTime Fecha { get; set; } = DateTime.Today;
+    public DateTime Fecha { get; set; } = RelojPeru.Hoy;
 }
 
 public class Factura : ComprobanteBase
 {
     public override string TipoComprobante => Cpe.TipoComprobante.Factura;
 
-    /// <summary>Catálogo 51. "0101" = venta interna, "0200" = exportación.</summary>
-    public string TipoOperacion { get; set; } = "0101";
+    /// <summary>
+    /// Catálogo 51. "0101" venta interna, "0200" exportación de bienes,
+    /// "0201" a "0208" exportación de servicios.
+    /// </summary>
+    public string TipoOperacion { get; set; } = Cpe.TipoOperacion.VentaInterna;
 
     /// <summary>"Contado" o "Credito". Obligatorio en facturas.</summary>
-    public string FormaPago { get; set; } = "Contado";
+    public string FormaPago { get; set; } = ReglasCredito.Contado;
+
+    /// <summary>
+    /// Las cuotas, cuando la factura es a crédito.
+    ///
+    /// NO SON OPCIONALES desde el 1 de enero de 2022 si el receptor tiene
+    /// RUC: SUNAT rechaza con los errores 3249 y 3251 una factura a crédito
+    /// que no declare al menos una cuota y el monto pendiente.
+    ///
+    /// A una persona natural con DNI sí se le puede facturar a crédito sin
+    /// detallarlas. La obligación nace de la factura negociable, que se
+    /// transfiere entre empresas.
+    /// </summary>
+    public List<CuotaCredito> Cuotas { get; set; } = [];
+
+    /// <summary>
+    /// Monto neto pendiente de pago: la suma de las cuotas.
+    ///
+    /// SE CALCULA Y NO SE PIDE APARTE a propósito. La regla 3319 exige que
+    /// coincida con la suma de las cuotas, así que pedirlo por separado solo
+    /// abriría la puerta a que no cuadre.
+    /// </summary>
+    public decimal MontoPendiente =>
+        CalculadoraTotales.Redondear(Cuotas.Sum(c => c.Monto));
 
     /// <summary>
     /// Datos de la detracción, cuando la operación está sujeta al SPOT.
@@ -86,16 +139,65 @@ public class Factura : ComprobanteBase
     /// </summary>
     public Detraccion? Detraccion { get; set; }
 
-    /// <summary>El tipo de operación que de verdad viaja al XML.</summary>
+    /// <summary>
+    /// País donde el servicio exportado se usa, explota o aprovecha.
+    /// Código ISO 3166-1 de dos letras.
+    ///
+    /// SOLO PARA LOS TIPOS 0201 Y 0208, y no puede ser "PE". En cualquier
+    /// otro tipo de operación sobra, y declararlo es un error.
+    /// </summary>
+    public string PaisDeUso { get; set; } = "";
+
+    /// <summary>
+    /// Acogimiento a la restitución simplificada de derechos arancelarios
+    /// (drawback). Añade la leyenda 2010.
+    /// </summary>
+    public bool Drawback { get; set; }
+
+    /// <summary>
+    /// Percepción del IGV, cuando el emisor es agente de percepción.
+    ///
+    /// CUANDO NO ES NULL CAMBIA TRES COSAS en el XML: el tipo de operación
+    /// pasa a 2001, aparece un cac:AllowanceCharge de cargo con el código
+    /// 51, 52 o 53, y otro cac:PaymentTerms con el total ya percibido.
+    ///
+    /// Lo que NO cambia es el importe total del comprobante: la percepción
+    /// no forma parte del precio de la operación y viaja aparte.
+    /// </summary>
+    public Percepcion? Percepcion { get; set; }
+
+    /// <summary>
+    /// Datos del desembarque, cuando la detracción es de recursos
+    /// hidrobiológicos (tipo de operación 1002).
+    ///
+    /// SUNAT los exige para poder cruzar la factura contra el desembarque
+    /// real. Son seis y ninguno es opcional.
+    /// </summary>
+    public RecursosHidrobiologicos? Hidrobiologicos { get; set; }
+
+    /// <summary>
+    /// El tipo de operación que de verdad viaja al XML.
+    ///
+    /// TRES CANDIDATOS SE DISPUTAN UN SOLO ATRIBUTO: la detracción quiere
+    /// 1001-1004, la percepción quiere 2001, y la exportación 0200-0208.
+    /// Aquí se decide el orden de precedencia, pero las clases de reglas
+    /// rechazan de antemano cualquier combinación de dos, así que en la
+    /// práctica solo uno puede estar presente.
+    /// </summary>
     public string TipoOperacionEfectivo =>
-        Detraccion?.TipoOperacion ?? TipoOperacion;
+        Detraccion?.TipoOperacion
+        ?? (Percepcion is not null
+                ? Cpe.TipoOperacion.SujetaAPercepcion
+                : TipoOperacion);
+
+    public bool EsExportacion => Cpe.TipoOperacion.EsExportacion(TipoOperacion);
 }
 
 public class Boleta : ComprobanteBase
 {
     public override string TipoComprobante => Cpe.TipoComprobante.Boleta;
 
-    public string TipoOperacion { get; set; } = "0101";
+    public string TipoOperacion { get; set; } = Cpe.TipoOperacion.VentaInterna;
     public string FormaPago { get; set; } = "Contado";
 }
 
@@ -176,20 +278,94 @@ public class LineaComprobante
     /// </summary>
     public decimal DescuentoPorcentaje { get; set; }
 
-    /// <summary>Catálogo 07.</summary>
+    /// <summary>Catálogo 07. "40" es exportación.</summary>
     public string TipoAfectacionIgv { get; set; } = AfectacionIgv.GravadoOperacionOnerosa;
 
     public decimal PorcentajeIgv { get; set; } = 18m;
 
     public bool TieneDescuento => DescuentoPorcentaje > 0;
+
+    /// <summary>
+    /// La tasa que se declara en el XML.
+    ///
+    /// En exportación es 0: el tributo es el 9995 - EXP y su importe es cero,
+    /// así que declarar 18% sería contradecirse dentro del mismo bloque.
+    /// </summary>
+    public decimal TasaDeclarada =>
+        AfectacionIgv.EsExportacion(TipoAfectacionIgv) ? 0m : PorcentajeIgv;
+
+    /// <summary>
+    /// ¿Esta línea son bolsas de plástico sujetas al ICBPER?
+    ///
+    /// VA EN LA LÍNEA Y NO EN EL COMPROBANTE porque el impuesto grava las
+    /// bolsas, no la venta. Una boleta de ferretería puede llevar cemento,
+    /// clavos y, en su propia línea, las tres bolsas en las que se lo lleva
+    /// el cliente.
+    ///
+    /// LA CANTIDAD DE BOLSAS ES LA CANTIDAD DE ESTA LÍNEA. No es un campo
+    /// aparte: la regla 3236 exige que coincidan.
+    /// </summary>
+    public bool AfectoIcbper { get; set; }
+
+    /// <summary>
+    /// Soles por bolsa. En null se usa la tasa vigente a la fecha de
+    /// emisión, que es lo habitual y lo que evita equivocarse.
+    /// </summary>
+    public decimal? IcbperUnitario { get; set; }
+
+    /// <summary>
+    /// Sistema de cálculo del ISC, catálogo 08. Vacío si no lleva ISC.
+    ///
+    /// DECLARARLO ES LO QUE ACTIVA EL IMPUESTO en esta línea. Si está
+    /// vacío, la línea no tiene ISC aunque traiga tasa.
+    /// </summary>
+    public string SistemaIsc { get; set; } = "";
+
+    /// <summary>Tasa del ISC, en porcentaje. 10 significa 10%.</summary>
+    public decimal TasaIsc { get; set; }
+
+    /// <summary>
+    /// ¿Esta línea lleva ISC?
+    ///
+    /// Lo decide el sistema y NO la tasa, a propósito: así una tasa en cero
+    /// con sistema declarado sale como el error que es (3104), en vez de
+    /// desaparecer sin que nadie se entere.
+    /// </summary>
+    public bool TieneIsc => !string.IsNullOrWhiteSpace(SistemaIsc);
+
+    /// <summary>
+    /// Datos extra del catálogo 55 que viajan dentro del ítem.
+    ///
+    /// SON EL CAJÓN DE SASTRE DE SUNAT: datos que no caben en ningún campo
+    /// del estándar UBL y que se declaran como propiedades del producto.
+    /// Hoy los usan la detracción de pesca y el transporte de pasajeros.
+    ///
+    /// Normalmente se rellenan solos, a partir del bloque que corresponda.
+    /// </summary>
+    public List<PropiedadItem> Propiedades { get; set; } = [];
 }
 
 /// <summary>
 /// Totales calculados del comprobante.
 ///
-/// ValorVenta es la suma de los valores de venta de las líneas, con todos los
-/// descuentos ya aplicados. SUNAT exige que la base imponible declarada
-/// coincida exactamente con esa suma.
+/// LEER ESTO ANTES DE TOCAR NADA, porque con anticipos el documento declara
+/// dos verdades a la vez y los nombres se prestan a confusión:
+///
+///   ValorVenta   → la operación COMPLETA sin IGV, sin restar anticipos.
+///   PrecioVenta  → la operación COMPLETA con IGV, sin restar anticipos.
+///   TotalGravado → la base imponible NETA, ya con el anticipo descontado.
+///   TotalIgv     → el IGV sobre esa base neta: solo lo que falta cobrar.
+///   ImporteTotal → lo que el cliente paga hoy: PrecioVenta menos anticipos.
+///
+/// No es una incoherencia de SUNAT: el IGV del anticipo se pagó cuando se
+/// emitió aquella factura, y volver a declararlo sería pagarlo dos veces.
+/// Sin anticipos, PrecioVenta e ImporteTotal son el mismo número y todo
+/// esto desaparece.
+///
+/// Los campos nuevos van AL FINAL y con valor por defecto a propósito: así
+/// cualquier código que ya construyera este record por posición sigue
+/// compilando. Moverlos de sitio rompería las llamadas existentes sin que
+/// el compilador diga dónde.
 /// </summary>
 public record TotalesComprobante(
     decimal TotalGravado,
@@ -199,7 +375,111 @@ public record TotalesComprobante(
     decimal TotalDescuentos,
     decimal TotalIgv,
     decimal ValorVenta,
-    decimal ImporteTotal);
+    decimal ImporteTotal,
+    decimal TotalExportacion = 0m,
+    decimal TotalAnticipos = 0m,
+    decimal AnticipoGravado = 0m,
+    decimal AnticipoExonerado = 0m,
+    decimal AnticipoInafecto = 0m,
+    decimal PrecioVenta = 0m,
+
+    // IgvGratuito: el IGV de las líneas gratuitas. Se declara y no se cobra.
+    //
+    // NO ESTÁ SUMADO EN TotalIgv, a propósito: la regla 3294 dice que el
+    // total de impuestos del documento solo suma los tributos 1000, 1016,
+    // 2000, 7152 y 9999. El 9996 de las gratuitas viaja en su propio
+    // subtotal y en ningún otro sitio.
+    decimal IgvGratuito = 0m,
+
+    // TotalOtrosCargos: cbc:ChargeTotalAmount. Los cargos que no afectan la
+    // base imponible: códigos 45, 46, 48 y 50 (regla 3301).
+    decimal TotalOtrosCargos = 0m,
+
+    // TotalOtrosDescuentos: cbc:AllowanceTotalAmount. Los descuentos que no
+    // afectan la base imponible: códigos 01, 03 y 63 (regla 3300).
+    //
+    // OJO CON EL NOMBRE PARECIDO: TotalDescuentos, más arriba, es otra cosa
+    // —los descuentos de línea que SÍ reducen la base— y no se declara en
+    // ningún tag; ya está restado dentro del valor de venta.
+    decimal TotalOtrosDescuentos = 0m,
+
+    // TotalIcbper: el impuesto a las bolsas de plástico, tributo 7152.
+    //
+    // ESTE SÍ ENTRA EN EL PRECIO DE VENTA Y EN EL IMPORTE TOTAL, al revés
+    // que las gratuitas y la percepción: la regla 3279 lo suma dentro del
+    // TaxInclusiveAmount, y la 3294 lo suma dentro del total de impuestos.
+    decimal TotalIcbper = 0m,
+
+    // TotalGravadoIvap: la base imponible del arroz pilado, tributo 1016.
+    //
+    // VA APARTE DE TotalGravado porque son tributos distintos y cada uno
+    // necesita su propio subtotal global. Por la regla 2644 nunca hay
+    // valores en los dos a la vez: un comprobante es de IVAP o no lo es.
+    decimal TotalGravadoIvap = 0m,
+
+    // TotalIvap: el impuesto del 4% sobre esa base.
+    decimal TotalIvap = 0m,
+
+    // TotalIsc: el Impuesto Selectivo al Consumo, tributo 2000.
+    decimal TotalIsc = 0m,
+
+    // TotalBaseIsc: la suma de las bases sobre las que se calculó (regla
+    // 3296). No es lo mismo que TotalIsc ni que el valor de venta.
+    decimal TotalBaseIsc = 0m,
+
+    // ValorVentaGravado: la suma de los valores de venta de las líneas
+    // gravadas, SIN el ISC.
+    //
+    // EXISTE PORQUE CON ISC TotalGravado YA NO SIRVE PARA ESTO. TotalGravado
+    // es la base del IGV, que incluye el ISC (regla 3272); el valor de venta
+    // del documento no lo incluye (regla 3278, que no lista el tributo
+    // 2000). Son dos números que en una factura normal coinciden y aquí
+    // dejan de hacerlo.
+    decimal ValorVentaGravado = 0m)
+{
+    /// <summary>
+    /// El precio de venta que de verdad viaja al XML.
+    ///
+    /// Si alguien construyó el record sin PrecioVenta, cae de pie en el
+    /// importe total, que es el valor correcto cuando no hay anticipos.
+    /// Un cero ahí sería un rechazo silencioso muy difícil de rastrear.
+    /// </summary>
+    public decimal PrecioVentaEfectivo => PrecioVenta > 0 ? PrecioVenta : ImporteTotal;
+
+    public bool HayAnticipos => TotalAnticipos > 0;
+
+    /// <summary>Base gravada de las líneas, antes de descontar anticipos.</summary>
+    public decimal GravadoDeLineas => TotalGravado + AnticipoGravado;
+
+    public decimal ExoneradoDeLineas => TotalExonerado + AnticipoExonerado;
+
+    public decimal InafectoDeLineas => TotalInafecto + AnticipoInafecto;
+
+    /// <summary>¿El comprobante entregó algo gratis?</summary>
+    public bool HayGratuitas => TotalGratuito > 0;
+
+    public bool HayOtrosCargos => TotalOtrosCargos > 0;
+
+    public bool HayOtrosDescuentos => TotalOtrosDescuentos > 0;
+
+    public bool HayIcbper => TotalIcbper > 0;
+
+    /// <summary>
+    /// El total de impuestos que va en cbc:TaxAmount de cabecera.
+    ///
+    /// SUMA EL IGV Y EL ICBPER, porque la regla 3294 dice que ese tag es la
+    /// suma de los tributos 1000, 1016, 2000, 7152 y 9999. El 9996 de las
+    /// gratuitas no está en la lista y por eso no entra.
+    /// </summary>
+    public decimal ImpuestosDeclarados =>
+        CalculadoraTotales.Redondear(
+            TotalIgv + TotalIcbper + TotalIvap + TotalIsc);
+
+    public bool HayIsc => TotalIsc > 0;
+
+    /// <summary>¿El comprobante es de arroz pilado?</summary>
+    public bool HayIvap => TotalGravadoIvap > 0;
+}
 
 /// <summary>
 /// Resultado del cálculo de una línea.
@@ -218,7 +498,35 @@ public record LineaCalculada(
     decimal Descuento,
     decimal ValorVenta,
     decimal Igv,
-    decimal PrecioUnitarioConIgv)
+    decimal PrecioUnitarioConIgv,
+
+    // Icbper: el impuesto a las bolsas de esta línea, si las hay.
+    // Va al final y con valor por defecto para no romper las llamadas
+    // posicionales que ya existían.
+    decimal Icbper = 0m,
+
+    // TasaIcbper: los soles por bolsa que se declararon. Se guarda porque
+    // el XML lo pide aparte del importe (cbc:PerUnitAmount), y recalcularlo
+    // en el generador abriría la puerta a que los dos dejaran de cuadrar.
+    decimal TasaIcbper = 0m,
+
+    // Isc: el Impuesto Selectivo al Consumo de esta línea.
+    decimal Isc = 0m)
 {
     public bool TieneDescuento => Descuento > 0;
+
+    public bool TieneIcbper => Icbper > 0;
+
+    public bool TieneIsc => Isc > 0;
+
+    /// <summary>
+    /// La base sobre la que se calcula el IGV de esta línea.
+    ///
+    /// ES EL VALOR DE VENTA MÁS EL ISC, y ahí está toda la particularidad
+    /// del ISC: se paga IGV sobre el ISC. La regla 3272 compara justamente
+    /// esto, y una línea que declare solo el valor de venta se rechaza.
+    ///
+    /// Sin ISC vale lo mismo que ValorVenta y no cambia nada.
+    /// </summary>
+    public decimal BaseIgv => ValorVenta + Isc;
 }

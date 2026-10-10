@@ -85,6 +85,53 @@ public sealed class ProcesadorResumenes
                     lote.FechaEmision, lote.TenantId);
             }
         }
+
+        await AgruparAnulacionesAsync(ct);
+    }
+
+    /// <summary>
+    /// Arma los resúmenes que anulan boletas.
+    ///
+    /// POR QUÉ ES UN SEGUNDO RECORRIDO Y NO UNA CONDICIÓN DENTRO DEL DE
+    /// ARRIBA: las anulaciones no esperan a que el día cierre.
+    ///
+    /// Un resumen de altas solo puede armarse cuando la fecha ya pasó,
+    /// porque hasta entonces pueden seguir emitiéndose boletas de ese día.
+    /// Una anulación no tiene ese problema: se pidió sobre una boleta
+    /// concreta que ya existe y ya está declarada, así que puede viajar en
+    /// cuanto alguien la pida.
+    ///
+    /// Y hay prisa real: el plazo para anular corre desde la emisión, no
+    /// desde que se pide. Hacerla esperar al cierre del día regalaría horas
+    /// de un plazo que ya es corto.
+    /// </summary>
+    private async Task AgruparAnulacionesAsync(CancellationToken ct)
+    {
+        var lotes = await _resumenes.BuscarLotesDeAnulacionAsync(ct);
+
+        foreach (var lote in lotes)
+        {
+            try
+            {
+                var armado = await _resumenes.ArmarResumenDeAnulacionAsync(
+                    lote.TenantId, lote.FechaEmision, ct);
+
+                if (armado is null) continue;
+
+                _log.LogInformation(
+                    "Resumen {Identificador} armado para ANULAR {Cantidad} " +
+                    "boleta(s) del {Fecha}.",
+                    armado.Value.Resumen.Identificador,
+                    armado.Value.Boletas.Count,
+                    lote.FechaEmision);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex,
+                    "No se pudo armar la anulacion de {Fecha} para el emisor {Tenant}.",
+                    lote.FechaEmision, lote.TenantId);
+            }
+        }
     }
 
     // -------------------------------------------------------- 2. enviar
@@ -139,7 +186,14 @@ public sealed class ProcesadorResumenes
                 // Los totales se recalculan desde la boleta original, no se
                 // copian de la base: así el resumen nunca puede declarar un
                 // monto distinto al del comprobante que informa.
-                return LineaResumen.DesdeBoleta(boleta, indice + 1);
+                //
+                // EL ESTADO VIENE DE LA BASE Y NO SE ASUME. Es 1 cuando la
+                // boleta se informa por primera vez y 3 cuando se anula, y
+                // el repositorio lo deduce de qué columna la tiene cogida.
+                // Ponerlo a mano aquí significaría que un resumen de
+                // anulaciones viajaría dando de alta lo que venía a borrar.
+                return LineaResumen.DesdeBoleta(
+                    boleta, indice + 1, (EstadoResumen)b.EstadoLinea);
             }).ToList()
         };
 
@@ -259,9 +313,18 @@ public sealed class ProcesadorResumenes
             ? ""
             : " Observaciones: " + string.Join(" | ", resultado.Observaciones);
 
+        // QUÉ HACÍA ESTE RESUMEN SE AVERIGUA ANTES DE CERRARLO, y el orden
+        // no es negociable: al cerrar una anulación rechazada, las boletas
+        // sueltan el vínculo con el resumen. Preguntar después devolvería
+        // una lista vacía y el log diría lo contrario de lo que pasó.
+        var boletas = await _resumenes.BoletasDeAsync(resumen.Id, ct);
+        var anulaba = boletas.Count > 0 && boletas.All(b => b.EstadoLinea == 3);
+
         // El desenlace del resumen se aplica también a todas sus boletas:
         // una boleta cuyo resumen fue aceptado está comunicada, y una cuyo
-        // resumen fue rechazado no lo está.
+        // resumen fue rechazado no lo está. Si el resumen anulaba, el
+        // desenlace significa lo contrario, y de eso se encarga el
+        // repositorio.
         await _resumenes.CerrarAsync(
             resumen.Id, estado, resultado.CodigoRespuesta,
             resultado.Descripcion + observaciones, rutaCdr, ct);
@@ -269,8 +332,19 @@ public sealed class ProcesadorResumenes
         if (resultado.Aceptado)
         {
             _log.LogInformation(
-                "{Id} aceptado. {Cantidad} boleta(s) comunicadas.",
+                anulaba
+                    ? "{Id} aceptado. {Cantidad} boleta(s) ANULADAS."
+                    : "{Id} aceptado. {Cantidad} boleta(s) comunicadas.",
                 resumen.Identificador, resumen.Comprobantes);
+        }
+        else if (anulaba)
+        {
+            _log.LogWarning(
+                "{Id} RECHAZADO. Código {Codigo}: {Mensaje}. " +
+                "Sus {Cantidad} boleta(s) SIGUEN VÁLIDAS y la anulación se " +
+                "canceló: hay que volver a pedirla.",
+                resumen.Identificador, resultado.CodigoRespuesta,
+                resultado.Descripcion, resumen.Comprobantes);
         }
         else
         {

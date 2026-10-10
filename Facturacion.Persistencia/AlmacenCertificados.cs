@@ -86,7 +86,7 @@ public sealed class AlmacenCertificados
                 "El archivo no contiene la llave privada. Sin ella no se puede " +
                 "firmar: necesitas el .pfx completo, no solo el certificado público.");
 
-        if (certificado.NotAfter < DateTime.Now)
+        if (certificado.NotAfter.ToUniversalTime() < DateTime.UtcNow)
             throw new InvalidOperationException(
                 $"El certificado venció el {certificado.NotAfter:yyyy-MM-dd}. " +
                 "SUNAT rechaza todo lo firmado con un certificado vencido.");

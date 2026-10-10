@@ -1,0 +1,71 @@
+# =============================================================================
+# Qué NO entra en la imagen
+#
+# POR QUÉ IMPORTA MÁS DE LO QUE PARECE:
+#
+# Todo lo que está en el contexto de build viaja al demonio de Docker antes de
+# empezar, y todo lo que se copia queda DENTRO de la imagen. Una imagen es un
+# archivo que se puede subir a un registro, descargar y abrir capa por capa.
+#
+# Un certificado .pfx o un .env dentro de una imagen es un secreto publicado,
+# aunque el Dockerfile nunca lo mencione: basta que una capa lo haya copiado
+# para que esté ahí para siempre, incluso si otra capa posterior lo borra.
+# =============================================================================
+
+# --- LO QUE NO PUEDE ENTRAR NUNCA -------------------------------------------
+
+.env
+.env.*
+!.env.ejemplo
+
+*.pfx
+*.p12
+*.key
+*.pem
+
+# Los puertos y la llave maestra de desarrollo viven aquí.
+**/Properties/launchSettings.json
+
+
+# --- Lo compilado ------------------------------------------------------------
+#
+# Se recompila dentro. Copiar el bin/ de Windows a una imagen Linux —y más aún
+# a una ARM— produce fallos que no se parecen en nada a su causa.
+
+**/bin/
+**/obj/
+
+
+# --- Lo que no hace falta ----------------------------------------------------
+
+.git/
+.github/
+.vs/
+.idea/
+**/*.user
+
+# Los tests y el banco de pruebas no se despliegan.
+Facturacion.Cpe.Tests/
+Facturacion.Consola/
+
+# Documentación, scripts y ejemplos.
+*.md
+*.ps1
+*.http
+*.csv
+*.svg
+*.png
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# El almacén local, si quedó de antes de MinIO.
+almacen/
+
+
+# --- LAS MIGRACIONES TAMPOCO ENTRAN, y es deliberado -------------------------
+#
+# No se aplican solas al arrancar el contenedor: se corren a mano, en orden y
+# una sola vez. Un contenedor que se reinicia en bucle no puede estar
+# intentando migrar la base en cada vuelta.
+migraciones/

@@ -1,0 +1,76 @@
+# =============================================================================
+# Facturacion.Worker
+#
+# Se construye DESDE LA RAIZ DE LA SOLUCION:
+#
+#     docker build -f Dockerfile.worker -t facturacion-worker .
+#
+#
+# EN QUE SE DIFERENCIA DEL DE LA API, que es casi igual:
+#
+#   - Parte de `runtime` y no de `aspnet`: el worker no atiende peticiones
+#     HTTP, asi que no necesita el servidor web. Son unos 20 MB menos.
+#
+#   - Necesita la carpeta xsd/ del repositorio. El .csproj la copia al
+#     compilar, pero solo si esta en el contexto de build.
+#
+#   - No expone puerto ni tiene healthcheck: no hay nada a quien preguntarle.
+#     Si el proceso muere, Docker lo reinicia por la politica de restart.
+# =============================================================================
+
+# --- Etapa 1: compilar -------------------------------------------------------
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /origen
+
+COPY Facturacion.sln .
+COPY Directory.Build.props .
+COPY Facturacion.Cpe/Facturacion.Cpe.csproj                   Facturacion.Cpe/
+COPY Facturacion.Pdf/Facturacion.Pdf.csproj                   Facturacion.Pdf/
+COPY Facturacion.Persistencia/Facturacion.Persistencia.csproj Facturacion.Persistencia/
+COPY Facturacion.Worker/Facturacion.Worker.csproj             Facturacion.Worker/
+
+RUN dotnet restore Facturacion.Worker/Facturacion.Worker.csproj
+
+COPY Facturacion.Cpe/          Facturacion.Cpe/
+COPY Facturacion.Pdf/          Facturacion.Pdf/
+COPY Facturacion.Persistencia/ Facturacion.Persistencia/
+COPY Facturacion.Worker/       Facturacion.Worker/
+
+# LOS ESQUEMAS XSD VAN AQUI, y si esta linea falta el sintoma es el silencio:
+# el worker arranca, dice "Validacion XSD DESACTIVADA" en el log y nadie lo
+# lee. Los XML salen sin comprobar.
+COPY xsd/ xsd/
+
+RUN dotnet publish Facturacion.Worker/Facturacion.Worker.csproj \
+    -c Release \
+    -o /publicado \
+    --no-restore
+
+
+# --- Etapa 2: ejecutar -------------------------------------------------------
+
+FROM mcr.microsoft.com/dotnet/runtime:8.0 AS final
+WORKDIR /app
+
+# Las mismas dos razones que en la API:
+#
+#   fuentes   el worker no genera PDF hoy, pero comparte proyecto con Pdf y
+#             una dependencia de QuestPDF sin fuentes falla al cargar
+#   tzdata    todo el sistema razona en hora de Peru
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        fontconfig \
+        fonts-dejavu-core \
+        fonts-liberation \
+        tzdata \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV TZ=America/Lima
+
+COPY --from=build /publicado .
+
+USER $APP_UID
+
+ENTRYPOINT ["dotnet", "Facturacion.Worker.dll"]

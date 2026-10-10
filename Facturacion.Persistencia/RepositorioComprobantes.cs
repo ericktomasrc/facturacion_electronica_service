@@ -50,7 +50,15 @@ public sealed class RepositorioComprobantes
     {
         ArgumentNullException.ThrowIfNull(comprobante);
 
-        if (comprobante.Lineas.Count == 0)
+        // HAY COMPROBANTES QUE NO TIENEN LÍNEAS, Y ESTÁ BIEN.
+        //
+        // El de retención y el de percepción no venden nada: su detalle son
+        // las facturas de otro sobre las que se retuvo o percibió. Exigirles
+        // líneas de producto sería exigirles algo que el documento no tiene.
+        //
+        // Se reconocen por la interfaz y no por el tipo, para que el día que
+        // aparezca el cuarto documento sin líneas no haya que volver aquí.
+        if (comprobante.Lineas.Count == 0 && comprobante is not IComprobanteSinLineas)
             throw new ArgumentException(
                 "El comprobante no tiene líneas.", nameof(comprobante));
 
@@ -130,7 +138,30 @@ public sealed class RepositorioComprobantes
 
         // --- 3. Insertar el comprobante ---------------------------------------
 
-        var totales = CalculadoraTotales.Calcular(comprobante);
+        // EL IMPORTE DE UNA LIQUIDACIÓN NO SE CALCULA COMO EL DE UNA FACTURA.
+        //
+        // En una factura el importe total es lo que el CLIENTE PAGA: valor de
+        // venta más impuestos. En una liquidación de compra es lo que el
+        // VENDEDOR COBRA, que es el valor de compra menos el IGV —que asume
+        // el comprador como crédito fiscal— menos la retención de renta.
+        //
+        // Son dos números distintos y la diferencia es grande: en una compra
+        // de 6 000 soles, 7 080 contra 5 910. Usar aquí CalculadoraTotales
+        // dejaría en la base, en el panel y en los listados un importe un 20%
+        // más alto que el que de verdad se pagó.
+
+        var importeTotal = comprobante switch
+        {
+            LiquidacionCompra liquidacion =>
+                CalculadoraLiquidacion.Calcular(liquidacion).ImporteAPagar,
+
+            // El importe de un comprobante de retención o percepción es lo
+            // retenido o percibido, no lo pagado. Cada documento sabe cuál de
+            // sus números lo representa.
+            IComprobanteSinLineas sinLineas => sinLineas.ImporteDeclarado,
+
+            _ => CalculadoraTotales.Calcular(comprobante).ImporteTotal
+        };
 
         var cpeJson = JsonSerializer.Serialize(
             comprobante, comprobante.GetType(), OpcionesJson);
@@ -156,7 +187,7 @@ public sealed class RepositorioComprobantes
                     correlativo = correlativo.Value,
                     fechaEmision = DateOnly.FromDateTime(comprobante.FechaEmision),
                     moneda = comprobante.Moneda,
-                    importeTotal = totales.ImporteTotal,
+                    importeTotal,
                     estado = EstadoCpe.Borrador,
                     cpe = cpeJson,
                     extra = string.IsNullOrWhiteSpace(extraJson) ? "{}" : extraJson,
@@ -176,7 +207,7 @@ public sealed class RepositorioComprobantes
         return new ComprobanteGuardado(
             id, tenantId,
             comprobante.TipoComprobante, comprobante.Serie, correlativo.Value,
-            EstadoCpe.Borrador, totales.ImporteTotal, YaExistia: false);
+            EstadoCpe.Borrador, importeTotal, YaExistia: false);
     }
 
     /// <summary>
@@ -418,7 +449,8 @@ public sealed class RepositorioComprobantes
                        codigo_sunat     AS "CodigoSunat",
                        mensaje_sunat    AS "MensajeSunat",
                        cpe::text        AS "CpeJson",
-                       ruta_xml         AS "RutaXml"
+                       ruta_xml         AS "RutaXml",
+                       extra::text      AS "ExtraJson"
                   FROM comprobantes
                  WHERE id = @comprobanteId
                 """,

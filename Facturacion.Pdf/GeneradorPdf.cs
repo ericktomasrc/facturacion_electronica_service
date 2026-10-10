@@ -10,7 +10,12 @@ namespace Facturacion.Pdf;
 public record OpcionesImpresion(
     string? EstadoSunat = null,
     string? MensajeSunat = null,
-    byte[]? Logo = null)
+    byte[]? Logo = null,
+
+    // Campos propios de la empresa que se imprimen y no viajan a SUNAT.
+    // La clave es como la mandó quien integra ("ordenCompra") y el
+    // generador se encarga de convertirla en una etiqueta legible.
+    IReadOnlyDictionary<string, string>? Extra = null)
 {
     public static readonly OpcionesImpresion PorDefecto = new();
 }
@@ -27,6 +32,14 @@ public record OpcionesImpresion(
 /// SUNAT exige que aparezcan ciertos datos, pero la forma es tuya, y cada
 /// cliente va a querer la suya. Por eso conviene que este generador sea fácil
 /// de variar: es lo primero que te van a pedir cambiar.
+///
+/// PERO LA LIBERTAD TIENE UN LÍMITE, Y AQUÍ SE HABÍA CRUZADO: los importes
+/// que se muestran tienen que sumar lo que dice el total. Este generador se
+/// quedó en la versión de hace semanas y no declaraba los anticipos, la
+/// detracción, la percepción ni los cargos globales — así que una factura con
+/// anticipo enseñaba un valor de venta de 10 000, un IGV de 1 800 y un total
+/// de 9 440, sin nada que explicara la diferencia. El XML estaba bien; el
+/// papel parecía mal sumado, y es el papel lo que el cliente mira.
 ///
 /// SOBRE LA LICENCIA DE QuestPDF: la licencia Community es gratuita para
 /// organizaciones por debajo de cierto nivel de facturación anual. Por encima
@@ -98,10 +111,11 @@ public static class GeneradorPdf
                 {
                     columna.Spacing(10);
 
-                    columna.Item().Element(e => DatosReceptor(e, comprobante));
+                    columna.Item().Element(e => DatosReceptor(e, comprobante, opciones));
                     columna.Item().Element(e => Detalle(e, comprobante, lineas));
                     columna.Item().Element(e => Totales(e, comprobante, totales));
                     columna.Item().Element(e => Leyenda(e, comprobante, totales));
+                    columna.Item().Element(e => Condiciones(e, comprobante));
                 });
 
                 pagina.Footer().Element(e =>
@@ -165,7 +179,8 @@ public static class GeneradorPdf
         });
     }
 
-    private static void DatosReceptor(IContainer contenedor, ComprobanteBase c)
+    private static void DatosReceptor(
+        IContainer contenedor, ComprobanteBase c, OpcionesImpresion opciones)
     {
         contenedor
             .Background(Colors.Grey.Lighten4)
@@ -202,6 +217,11 @@ public static class GeneradorPdf
                 {
                     fila.RelativeItem().Text(t =>
                     {
+                        // LA FECHA DE EMISIÓN NO SE CONVIERTE, Y ES CORRECTO.
+                        //
+                        // Ya viene en hora de Perú: la puso RelojPeru.Ahora
+                        // cuando se emitió. Aplicarle una conversión aquí la
+                        // movería un día en los comprobantes de la noche.
                         t.Span("Fecha de emisión: ").SemiBold();
                         t.Span(c.FechaEmision.ToString("dd/MM/yyyy", Inv));
                     });
@@ -212,6 +232,34 @@ public static class GeneradorPdf
                         t.Span(NombreMoneda(c.Moneda));
                     });
                 });
+
+                // La forma de pago, que el cliente busca antes que nada.
+                if (c is Factura factura)
+                {
+                    columna.Item().Row(fila =>
+                    {
+                        fila.RelativeItem().Text(t =>
+                        {
+                            t.Span("Condición de pago: ").SemiBold();
+                            t.Span(ReglasCredito.EsCredito(factura.FormaPago)
+                                ? "Crédito"
+                                : "Contado");
+                        });
+
+                        if (c.TipoCambio is not null)
+                        {
+                            fila.ConstantItem(200).Text(t =>
+                            {
+                                t.Span("Tipo de cambio: ").SemiBold();
+                                t.Span(c.TipoCambio.Tasa.ToString("F3", Inv));
+                            });
+                        }
+                        else
+                        {
+                            fila.ConstantItem(200);
+                        }
+                    });
+                }
 
                 // Las notas deben decir qué documento modifican: sin eso,
                 // quien la recibe no sabe a qué factura corresponde.
@@ -230,6 +278,31 @@ public static class GeneradorPdf
                         t.Span("Modifica a: ").SemiBold();
                         t.Span($"{nd.Afectado.Numero}  —  {MotivoNotaDebito.Descripcion(nd.CodigoMotivo)}");
                     });
+                }
+
+                // LOS CAMPOS PROPIOS DE LA EMPRESA, AL PIE DEL BLOQUE.
+                //
+                // El estándar de SUNAT no tiene sitio para la orden de compra
+                // del cliente, ni para un centro de costo, ni para el nombre
+                // del vendedor. Esos datos no viajan en el XML y este papel es
+                // el único lugar donde el cliente puede leerlos.
+                //
+                // No es un adorno: hay empresas que no pagan una factura que
+                // no traiga impreso su número de orden de compra.
+                //
+                // Van al final y no junto a la fecha a propósito: son
+                // variables en número y en largo, y meterlos en la rejilla de
+                // dos columnas descuadraría el bloque en cuanto uno sea largo.
+                if (opciones.Extra is { Count: > 0 } extra)
+                {
+                    foreach (var campo in extra)
+                    {
+                        columna.Item().Text(t =>
+                        {
+                            t.Span($"{EtiquetaExtra(campo.Key)}: ").SemiBold();
+                            t.Span(campo.Value);
+                        });
+                    }
                 }
             });
     }
@@ -264,6 +337,7 @@ public static class GeneradorPdf
             foreach (var calculada in lineas)
             {
                 var l = calculada.Linea;
+                var esGratuita = AfectacionIgv.EsGratuita(l.TipoAfectacionIgv);
 
                 Celda(tabla, l.Numero.ToString(Inv));
                 Celda(tabla, l.Cantidad.ToString("0.##", Inv));
@@ -276,6 +350,25 @@ public static class GeneradorPdf
                     if (!string.IsNullOrWhiteSpace(l.CodigoProducto))
                         columna.Item().Text(l.CodigoProducto)
                             .FontSize(7).FontColor(Colors.Grey.Darken1);
+
+                    // UNA LÍNEA GRATUITA TIENE QUE VERSE COMO GRATUITA.
+                    //
+                    // Su importe aparece en la columna de la derecha igual
+                    // que el de las demás, pero no se cobra. Sin esta marca,
+                    // el cliente suma los importes, no le da el total, y
+                    // llama para preguntar qué está mal.
+                    if (esGratuita)
+                        columna.Item().Text("TRANSFERENCIA GRATUITA — no se cobra")
+                            .FontSize(7).SemiBold().FontColor(Colors.Grey.Darken2);
+
+                    // Cuántas bolsas y a cuánto. El cliente ve un cargo que
+                    // no pidió, y tiene derecho a saber de dónde sale.
+                    if (calculada.TieneIcbper)
+                        columna.Item().Text(
+                            $"ICBPER: {l.Cantidad.ToString("0", Inv)} x " +
+                            $"S/ {F2(calculada.TasaIcbper)} = " +
+                            $"S/ {F2(calculada.Icbper)}")
+                            .FontSize(7).FontColor(Colors.Grey.Darken2);
                 });
 
                 Celda(tabla, F2(l.ValorUnitario), alinearDerecha: true);
@@ -284,7 +377,9 @@ public static class GeneradorPdf
                     calculada.Descuento > 0 ? F2(calculada.Descuento) : "",
                     alinearDerecha: true);
 
-                Celda(tabla, F2(calculada.ValorVenta), alinearDerecha: true);
+                Celda(tabla,
+                    esGratuita ? "0.00" : F2(calculada.ValorVenta),
+                    alinearDerecha: true);
             }
         });
 
@@ -312,10 +407,23 @@ public static class GeneradorPdf
         }
     }
 
+    /// <summary>
+    /// El bloque de totales.
+    ///
+    /// LA REGLA QUE MANDA AQUÍ: lo que se imprime tiene que sumar. Si el
+    /// cliente coge una calculadora y las cifras no le dan el total, el
+    /// documento pierde credibilidad aunque el XML sea perfecto.
+    ///
+    /// Por eso aparece TODO lo que mueve el importe: los anticipos que se
+    /// restan, los cargos que se suman, los descuentos globales. Y lo que
+    /// NO mueve el importe —las operaciones gratuitas, la percepción— va
+    /// separado y dicho con todas las letras, para que nadie lo sume por su
+    /// cuenta.
+    /// </summary>
     private static void Totales(
         IContainer contenedor, ComprobanteBase c, TotalesComprobante t)
     {
-        contenedor.AlignRight().Width(230).Column(columna =>
+        contenedor.AlignRight().Width(250).Column(columna =>
         {
             var simbolo = SimboloMoneda(c.Moneda);
 
@@ -333,26 +441,103 @@ public static class GeneradorPdf
             if (t.TotalInafecto > 0)
                 Linea(columna, "Op. inafectas", simbolo, t.TotalInafecto);
 
-            if (t.TotalGratuito > 0)
-                Linea(columna, "Op. gratuitas", simbolo, t.TotalGratuito);
+            // FALTABA, Y SE NOTABA: una factura de exportación mostraba el
+            // IGV en cero y ninguna línea con el valor de venta.
+            if (t.TotalExportacion > 0)
+                Linea(columna, "Op. de exportación", simbolo, t.TotalExportacion);
 
-            Linea(columna, "IGV", simbolo, t.TotalIgv);
+            // El arroz pilado no paga IGV: paga IVAP. Poner "IGV" sobre un
+            // 4% confundiria al contador del cliente, que es quien revisa
+            // estos papeles.
+            if (t.HayIvap)
+            {
+                Linea(columna, "Op. gravadas IVAP", simbolo, t.TotalGravadoIvap);
+                Linea(columna, $"IVAP ({Ivap.Tasa:0.##}%)", simbolo, t.TotalIvap);
+            }
+            else
+            {
+                Linea(columna, "IGV", simbolo, t.TotalIgv);
+            }
+
+            // EL ISC VA ANTES DEL IGV, y en el papel también: así el cliente
+            // ve de dónde sale la base sobre la que se calculó el impuesto.
+            if (t.TotalIsc > 0)
+                Linea(columna, "ISC", simbolo, t.TotalIsc);
+
+            // El impuesto de las bolsas, con su nombre en claro: "ICBPER" a
+            // secas no lo entiende nadie que no trabaje en esto.
+            if (t.TotalIcbper > 0)
+                Linea(columna, "ICBPER (bolsas plásticas)", simbolo, t.TotalIcbper);
+
+            // --- Lo que mueve el importe a pagar ------------------------------
+
+            if (t.TotalOtrosCargos > 0)
+                Linea(columna, "Otros cargos", simbolo, t.TotalOtrosCargos);
+
+            if (t.TotalOtrosDescuentos > 0)
+                Linea(columna, "Otros descuentos", simbolo, -t.TotalOtrosDescuentos);
+
+            if (t.TotalAnticipos > 0)
+                Linea(columna, "Anticipos aplicados", simbolo, -t.TotalAnticipos);
 
             columna.Item().PaddingTop(3).BorderTop(1)
                 .BorderColor(Colors.Grey.Darken1).PaddingTop(4)
                 .Row(fila =>
                 {
                     fila.RelativeItem().Text("IMPORTE TOTAL").Bold();
-                    fila.ConstantItem(95).AlignRight()
+                    fila.ConstantItem(105).AlignRight()
                         .Text($"{simbolo} {F2(t.ImporteTotal)}").Bold().FontSize(11);
                 });
+
+            // --- Lo que NO está dentro del importe total -----------------------
+            //
+            // La percepción es el caso delicado: el cliente paga más de lo
+            // que dice el IMPORTE TOTAL, y si el papel no lo dice, se entera
+            // al recibir el cobro.
+
+            if (c is Factura f && f.Percepcion is not null)
+            {
+                columna.Item().PaddingTop(6).Row(fila =>
+                {
+                    fila.RelativeItem().Text(
+                        $"Percepción ({f.Percepcion.Porcentaje.ToString("0.##", Inv)}%)");
+                    fila.ConstantItem(105).AlignRight()
+                        .Text($"S/ {F2(f.Percepcion.Monto)}");
+                });
+
+                columna.Item().PaddingTop(2).Row(fila =>
+                {
+                    fila.RelativeItem().Text("TOTAL A PAGAR").SemiBold();
+                    fila.ConstantItem(105).AlignRight()
+                        .Text($"S/ {F2(f.Percepcion.TotalConPercepcion)}")
+                        .SemiBold().FontSize(10);
+                });
+            }
+
+            // Las gratuitas van fuera de la suma, con su nombre.
+            if (t.TotalGratuito > 0)
+            {
+                columna.Item().PaddingTop(6).Row(fila =>
+                {
+                    fila.RelativeItem().Text("Op. gratuitas (no se cobran)")
+                        .FontSize(8).FontColor(Colors.Grey.Darken2);
+                    fila.ConstantItem(105).AlignRight()
+                        .Text($"{simbolo} {F2(t.TotalGratuito)}")
+                        .FontSize(8).FontColor(Colors.Grey.Darken2);
+                });
+            }
         });
 
         static void Linea(ColumnDescriptor c, string etiqueta, string simbolo, decimal monto) =>
             c.Item().Row(fila =>
             {
                 fila.RelativeItem().Text(etiqueta);
-                fila.ConstantItem(95).AlignRight().Text($"{simbolo} {F2(monto)}");
+
+                // Los importes negativos se escriben con el signo delante del
+                // símbolo, no dentro: "- S/ 150.00" y no "S/ -150.00".
+                fila.ConstantItem(105).AlignRight().Text(monto < 0
+                    ? $"- {simbolo} {F2(-monto)}"
+                    : $"{simbolo} {F2(monto)}");
             });
     }
 
@@ -361,9 +546,147 @@ public static class GeneradorPdf
     {
         contenedor.Column(columna =>
         {
+            columna.Spacing(3);
+
             columna.Item().Text(
                 NumeroALetras.Leyenda(t.ImporteTotal, c.Moneda))
                 .FontSize(8).SemiBold();
+
+            // Las mismas leyendas que viajan en el XML. Si SUNAT obliga a
+            // declararlas, el papel tampoco puede callarlas.
+            if (t.TotalGratuito > 0)
+                columna.Item().Text(Gratuitas.TextoLeyenda)
+                    .FontSize(7.5f).FontColor(Colors.Grey.Darken2);
+
+            if (c is Factura f && f.Detraccion is not null)
+                columna.Item().Text(Detraccion.TextoLeyenda)
+                    .FontSize(7.5f).FontColor(Colors.Grey.Darken2);
+
+            if (Ivap.Aplica(c))
+                columna.Item().Text(Ivap.TextoLeyenda)
+                    .FontSize(7.5f).FontColor(Colors.Grey.Darken2);
+        });
+    }
+
+    /// <summary>
+    /// Las condiciones de cobro: cuotas, detracción y los conceptos globales
+    /// con su descripción.
+    ///
+    /// ESTO NO ESTÁ EN EL XML DE LA MISMA FORMA. La descripción de un cargo
+    /// global no tiene sitio en el estándar, así que el papel es el único
+    /// lugar donde el cliente puede leer que esos 150 soles eran el despacho.
+    /// </summary>
+    private static void Condiciones(IContainer contenedor, ComprobanteBase c)
+    {
+        var factura = c as Factura;
+
+        var hayCargos = c.CargosGlobales.Count > 0;
+        var hayCuotas = factura is not null && factura.Cuotas.Count > 0;
+        var hayDetraccion = factura?.Detraccion is not null;
+
+        // UN CONTENEDOR DE QuestPDF NECESITA EXACTAMENTE UN HIJO, siempre.
+        // Devolver sin poner nada lanza "Container should contain exactly one
+        // child", que es un error de la librería y no del documento. Un texto
+        // vacío ocupa cero y cumple.
+        if (!hayCargos && !hayCuotas && !hayDetraccion)
+        {
+            contenedor.Text("");
+            return;
+        }
+
+        contenedor.Column(columna =>
+        {
+            columna.Spacing(6);
+
+            // --- Qué son los cargos y descuentos globales --------------------
+
+            if (hayCargos)
+            {
+                columna.Item().Column(caja =>
+                {
+                    caja.Item().Text("Cargos y descuentos")
+                        .FontSize(8).SemiBold();
+
+                    foreach (var cg in c.CargosGlobales)
+                    {
+                        // EL 49 YA ESTÁ DENTRO DEL VALOR DE VENTA, así que
+                        // hay que decirlo: si no, el cliente lo suma otra
+                        // vez y le sale de más.
+                        var nota = CodigoCargoDescuento.AfectaLaBase(cg.Codigo)
+                            ? "  (ya incluido en el valor de venta)"
+                            : "";
+
+                        caja.Item().Row(fila =>
+                        {
+                            fila.RelativeItem().Text(
+                                (string.IsNullOrWhiteSpace(cg.Descripcion)
+                                    ? CodigoCargoDescuento.Descripcion(cg.Codigo)
+                                    : cg.Descripcion) + nota)
+                                .FontSize(8);
+
+                            fila.ConstantItem(105).AlignRight().Text(
+                                (cg.EsCargo ? "" : "- ") +
+                                $"{SimboloMoneda(c.Moneda)} {F2(cg.Monto)}")
+                                .FontSize(8);
+                        });
+                    }
+                });
+            }
+
+            // --- Las cuotas ---------------------------------------------------
+
+            if (factura is not null && hayCuotas)
+            {
+                columna.Item().Column(caja =>
+                {
+                    caja.Item().Text(
+                        $"Pago en {factura.Cuotas.Count} " +
+                        (factura.Cuotas.Count == 1 ? "cuota" : "cuotas"))
+                        .FontSize(8).SemiBold();
+
+                    foreach (var cuota in factura.Cuotas.OrderBy(x => x.Numero))
+                    {
+                        caja.Item().Row(fila =>
+                        {
+                            fila.RelativeItem().Text(
+                                $"Cuota {cuota.Numero} — vence el " +
+                                cuota.FechaVencimiento.ToString("dd/MM/yyyy", Inv))
+                                .FontSize(8);
+
+                            fila.ConstantItem(105).AlignRight()
+                                .Text($"{SimboloMoneda(c.Moneda)} {F2(cuota.Monto)}")
+                                .FontSize(8);
+                        });
+                    }
+                });
+            }
+
+            // --- La detracción --------------------------------------------------
+            //
+            // Lleva la cuenta del Banco de la Nación porque es donde el
+            // cliente tiene que depositar. Sin ese número, la leyenda le dice
+            // que debe detraer y no dónde.
+
+            if (factura?.Detraccion is { } d)
+            {
+                columna.Item()
+                    .Background(Colors.Grey.Lighten4).Padding(6)
+                    .Column(caja =>
+                    {
+                        caja.Item().Text("Detracción (SPOT)").FontSize(8).SemiBold();
+
+                        caja.Item().Text(
+                            $"Bien o servicio {d.CodigoBienServicio} · " +
+                            $"{d.Porcentaje.ToString("0.##", Inv)}% · " +
+                            $"S/ {F2(d.Monto)}")
+                            .FontSize(8);
+
+                        caja.Item().Text(
+                            $"Depositar en la cuenta del Banco de la Nación " +
+                            $"N.° {d.CuentaBancoNacion}")
+                            .FontSize(8);
+                    });
+            }
         });
     }
 
@@ -409,22 +732,88 @@ public static class GeneradorPdf
 
     private static string F2(decimal valor) => valor.ToString("N2", Inv);
 
+    /// <summary>
+    /// Las etiquetas de los campos propios que ya sabemos cómo se llaman en
+    /// castellano.
+    ///
+    /// Partir "ordenCompra" por sus mayúsculas da "Orden compra", que se lee
+    /// mal en un documento que va a un cliente. Las preposiciones no se
+    /// deducen de la clave: hay que saberlas.
+    /// </summary>
+    private static readonly Dictionary<string, string> EtiquetasExtra =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ordenCompra"]    = "Orden de compra",
+            ["ordenServicio"]  = "Orden de servicio",
+            ["centroCosto"]    = "Centro de costo",
+            ["guiaRemision"]   = "Guía de remisión",
+            ["numeroContrato"] = "N.° de contrato",
+            ["contrato"]       = "Contrato",
+            ["vendedor"]       = "Vendedor",
+            ["referencia"]     = "Referencia",
+            ["observacion"]    = "Observación",
+            ["observaciones"]  = "Observaciones"
+        };
+
+    /// <summary>
+    /// Convierte la clave de un campo propio en algo legible.
+    ///
+    /// LA CLAVE LA ESCRIBE QUIEN INTEGRA, NO QUIEN LEE LA FACTURA. Imprimir
+    /// "ordenCompra" tal cual en un documento que va a un cliente delata el
+    /// nombre interno de un campo, y queda como un descuido.
+    ///
+    /// Si la clave no está en la tabla de arriba, se parte por sus mayúsculas
+    /// y por los guiones. No sale perfecto siempre, pero sale legible, y una
+    /// clave nueva no obliga a tocar este archivo.
+    /// </summary>
+    private static string EtiquetaExtra(string clave)
+    {
+        if (string.IsNullOrWhiteSpace(clave)) return "";
+
+        if (EtiquetasExtra.TryGetValue(clave, out var conocida)) return conocida;
+
+        var texto = new System.Text.StringBuilder();
+
+        foreach (var c in clave)
+        {
+            if (c is '_' or '-')
+            {
+                texto.Append(' ');
+            }
+            else if (char.IsUpper(c) && texto.Length > 0)
+            {
+                texto.Append(' ');
+                texto.Append(char.ToLowerInvariant(c));
+            }
+            else
+            {
+                texto.Append(c);
+            }
+        }
+
+        var resultado = texto.ToString().Trim();
+
+        return resultado.Length == 0
+            ? ""
+            : char.ToUpperInvariant(resultado[0]) + resultado.Substring(1);
+    }
+
     private static string NombreDocumento(string tipo) => tipo switch
     {
-        TipoComprobante.Factura     => "FACTURA ELECTRÓNICA",
-        TipoComprobante.Boleta      => "BOLETA DE VENTA ELECTRÓNICA",
+        TipoComprobante.Factura => "FACTURA ELECTRÓNICA",
+        TipoComprobante.Boleta => "BOLETA DE VENTA ELECTRÓNICA",
         TipoComprobante.NotaCredito => "NOTA DE CRÉDITO ELECTRÓNICA",
-        TipoComprobante.NotaDebito  => "NOTA DE DÉBITO ELECTRÓNICA",
-        _                           => "COMPROBANTE ELECTRÓNICO"
+        TipoComprobante.NotaDebito => "NOTA DE DÉBITO ELECTRÓNICA",
+        _ => "COMPROBANTE ELECTRÓNICO"
     };
 
     private static string NombreTipoDoc(string tipo) => tipo switch
     {
-        TipoDocIdentidad.Ruc         => "RUC",
-        TipoDocIdentidad.Dni         => "DNI",
-        TipoDocIdentidad.Pasaporte   => "Pasaporte",
+        TipoDocIdentidad.Ruc => "RUC",
+        TipoDocIdentidad.Dni => "DNI",
+        TipoDocIdentidad.Pasaporte => "Pasaporte",
         TipoDocIdentidad.Extranjeria => "C. Extranjería",
-        _                            => "Documento"
+        _ => "Documento"
     };
 
     private static string NombreMoneda(string moneda) => moneda switch
@@ -432,7 +821,7 @@ public static class GeneradorPdf
         "PEN" => "Soles",
         "USD" => "Dólares americanos",
         "EUR" => "Euros",
-        _     => moneda
+        _ => moneda
     };
 
     private static string SimboloMoneda(string moneda) => moneda switch
@@ -440,7 +829,7 @@ public static class GeneradorPdf
         "PEN" => "S/",
         "USD" => "US$",
         "EUR" => "€",
-        _     => moneda
+        _ => moneda
     };
 
     private static string DescripcionMotivo(NotaCredito n) =>

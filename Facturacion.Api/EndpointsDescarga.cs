@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Facturacion.Cpe;
 using Facturacion.Pdf;
 using Facturacion.Persistencia;
@@ -19,12 +18,6 @@ namespace Facturacion.Api;
 /// </summary>
 public static class EndpointsDescarga
 {
-    private static readonly JsonSerializerOptions OpcionesJson = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true
-    };
-
     public static void MapearDescargas(this WebApplication app)
     {
         var grupo = app.MapGroup("/v1/comprobantes/{id:guid}")
@@ -133,92 +126,12 @@ public static class EndpointsDescarga
         if (datos is null)
             return Results.NotFound(new RespuestaError("No se encontró el comprobante."));
 
-        if (datos.Estado == "BORRADOR")
-        {
-            return Results.NotFound(new RespuestaError(
-                "Todavía no se puede generar el PDF.",
-                "El comprobante está en BORRADOR: aún no se firmó ni se envió " +
-                "a SUNAT. Un PDF de algo que puede terminar rechazado induciría " +
-                "a error a quien lo reciba."));
-        }
-
-        ComprobanteBase comprobante;
-
-        try
-        {
-            comprobante = Deserializar(datos);
-        }
-        catch (Exception ex)
-        {
-            return Results.Problem(
-                detail: $"No se pudo reconstruir el comprobante: {ex.Message}",
-                statusCode: StatusCodes.Status500InternalServerError,
-                title: "Comprobante ilegible");
-        }
-
-        // El resumen de la firma se LEE del XML guardado, no se recalcula.
+        // TODO LO DEMÁS ES IDÉNTICO A LA RUTA DEL PANEL y vive en un solo
+        // sitio: qué tipo de documento es, cómo se reconstruye, qué generador
+        // le toca y cómo se lee el resumen de la firma.
         //
-        // El QR debe declarar exactamente lo que se firmó. Recalcularlo por
-        // separado abriría la puerta a que ambos valores se separen sin que
-        // nadie lo note.
-        string? digest = null;
-
-        if (!string.IsNullOrWhiteSpace(datos.RutaXml))
-        {
-            var xml = await archivos.LeerAsync(datos.RutaXml, ct);
-
-            if (xml is not null)
-            {
-                try
-                {
-                    var documento = System.Xml.Linq.XDocument.Parse(
-                        System.Text.Encoding.UTF8.GetString(xml));
-
-                    digest = CodigoQr.LeerDigest(documento);
-                }
-                catch (Exception)
-                {
-                    // Sin digest el PDF se genera igual, solo que su QR no
-                    // podrá verificarse contra la firma. Es mejor entregar un
-                    // documento incompleto que ninguno.
-                }
-            }
-        }
-
-        var opciones = new OpcionesImpresion(
-            EstadoSunat: TextoEstado(datos.Estado),
-            MensajeSunat: datos.MensajeSunat);
-
-        var pdf = GeneradorPdf.Generar(comprobante, digest, opciones);
-
-        return Results.File(pdf, "application/pdf", $"{datos.Numero}.pdf");
+        // Lo único que cambia entre las dos rutas es cómo se averigua de quién
+        // es el comprobante, y eso es justo lo de arriba.
+        return await PdfDeComprobante.ResponderAsync(datos, archivos, ct);
     }
-
-    private static string TextoEstado(string estado) => estado switch
-    {
-        "ACEPTADO" => "Aceptado por SUNAT",
-        "ACEPTADO_CON_OBSERVACIONES" => "Aceptado con observaciones",
-        "RECHAZADO" => "Rechazado por SUNAT",
-        "ANULADO" => "Dado de baja",
-        _ => "Pendiente de envío"
-    };
-
-    private static ComprobanteBase Deserializar(DatosParaPdf datos) =>
-        datos.TipoComprobante switch
-        {
-            TipoComprobante.Factura =>
-                JsonSerializer.Deserialize<Factura>(datos.CpeJson, OpcionesJson)!,
-
-            TipoComprobante.Boleta =>
-                JsonSerializer.Deserialize<Boleta>(datos.CpeJson, OpcionesJson)!,
-
-            TipoComprobante.NotaCredito =>
-                JsonSerializer.Deserialize<NotaCredito>(datos.CpeJson, OpcionesJson)!,
-
-            TipoComprobante.NotaDebito =>
-                JsonSerializer.Deserialize<NotaDebito>(datos.CpeJson, OpcionesJson)!,
-
-            _ => throw new InvalidOperationException(
-                $"Tipo de comprobante no soportado: {datos.TipoComprobante}")
-        };
 }

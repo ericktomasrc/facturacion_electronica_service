@@ -67,6 +67,74 @@ public static class CatalogosGre
     public const string TipoGuiaTransportista = "31";
 }
 
+/// <summary>
+/// Los indicadores del envío.
+///
+/// SON CADENAS LITERALES, no códigos. SUNAT las compara carácter a carácter
+/// y todas empiezan por "SUNAT_" (regla 3388), así que un espacio de más o
+/// una tilde donde no toca rechaza la guía.
+///
+/// Por eso están aquí como constantes y no se escriben a mano en ningún
+/// sitio: es la clase de dato que nadie recuerda bien.
+/// </summary>
+public static class IndicadorGre
+{
+    /// <summary>El emisor subcontrató el traslado a otro transportista.</summary>
+    public const string TransporteSubcontratado =
+        "SUNAT_Envio_IndicadorTrasporteSubcontratado";
+
+    /// <summary>El flete lo paga el remitente.</summary>
+    public const string PagaFleteRemitente =
+        "SUNAT_Envio_IndicadorPagadorFlete_Remitente";
+
+    /// <summary>El flete lo paga quien subcontrató.</summary>
+    public const string PagaFleteSubcontratador =
+        "SUNAT_Envio_IndicadorPagadorFlete_Subcontratador";
+
+    /// <summary>El flete lo paga un tercero.</summary>
+    public const string PagaFleteTercero =
+        "SUNAT_Envio_IndicadorPagadorFlete_Tercero";
+
+    /// <summary>Se traslada TODO lo que ampara la guía del remitente.</summary>
+    public const string TrasladoTotal =
+        "SUNAT_Envio_IndicadorTrasladoTotal";
+
+    /// <summary>
+    /// El traslado se hace en varios tramos con cambio de vehículo previsto.
+    ///
+    /// Es lo único que permite emitir una 31 SIN referenciar una guía del
+    /// remitente (regla 2574): en un transbordo, el tramo puede empezar antes
+    /// de que exista la 09.
+    /// </summary>
+    public const string TransbordoProgramado =
+        "SUNAT_Envio_IndicadorTransbordoProgramado";
+
+    /// <summary>El vehículo vuelve vacío.</summary>
+    public const string RetornoVehiculoVacio =
+        "SUNAT_Envio_IndicadorRetornoVehiculoVacio";
+
+    /// <summary>El vehículo vuelve con envases vacíos.</summary>
+    public const string RetornoVehiculoEnvaseVacio =
+        "SUNAT_Envio_IndicadorRetornoVehiculoEnvaseVacio";
+
+    /// <summary>Traslado en vehículo de categoría M1 o L.</summary>
+    public const string VehiculoMenor =
+        "SUNAT_Envio_IndicadorTrasladoVehiculoM";
+
+    /// <summary>
+    /// El remitente declara el vehículo y los conductores del transportista.
+    ///
+    /// Solo aplica a la guía 09, cuando el remitente conoce esos datos y los
+    /// pone él. Es lo que evita que el transportista tenga que emitir su 31
+    /// antes de salir.
+    /// </summary>
+    public const string VehiculoYConductoresDelTransportista =
+        "SUNAT_Envio_IndicadorVehiculoConductoresTransp";
+
+    public static bool EsValido(string indicador) =>
+        indicador.StartsWith("SUNAT_", StringComparison.Ordinal);
+}
+
 /// <summary>Una dirección de partida o de llegada.</summary>
 /// <param name="Ubigeo">
 /// Código de seis dígitos del INEI. SUNAT lo valida contra su listado, así
@@ -97,8 +165,26 @@ public record Transportista(
 public record Vehiculo(
     string Placa,
 
-    /// <summary>Tarjeta única de circulación. Opcional en muchos casos.</summary>
-    string? Tuc = null);
+    /// <summary>
+    /// Número del certificado de habilitación vehicular.
+    ///
+    /// En la guía del remitente casi nunca hace falta. En la del
+    /// TRANSPORTISTA es obligatorio (error 3355): es lo que acredita que ese
+    /// camión está habilitado para transporte de carga.
+    /// </summary>
+    string? Tuc = null,
+
+    /// <summary>
+    /// Número de la autorización especial, cuando el vehículo la necesita:
+    /// mercancía peligrosa, carga sobredimensionada, residuos sólidos.
+    /// </summary>
+    string? NumeroAutorizacion = null,
+
+    /// <summary>
+    /// Qué entidad dio esa autorización. Catálogo 37 de SUNAT: "01" MTC,
+    /// "02" Produce, "03" Digesa, "04" Senasa, "06" MINEM, "07" Sucamec.
+    /// </summary>
+    string? EntidadAutorizadora = null);
 
 /// <summary>Quien conduce el vehículo.</summary>
 public record Conductor(
@@ -109,6 +195,22 @@ public record Conductor(
 
     /// <summary>Número de licencia de conducir.</summary>
     string Licencia);
+
+/// <summary>
+/// Quien contrató el traslado, en una guía de transportista.
+///
+/// ES EL REMITENTE DE LA MERCANCÍA: la empresa que emitió su propia guía 09
+/// y que puso la carga en el camión. El transportista tiene que declararlo
+/// porque su guía sola no explica de dónde salieron los bienes.
+///
+/// Va en cac:OriginatorCustomerParty, que es un bloque que la guía del
+/// remitente NO usa: allí el remitente es el emisor y no hace falta
+/// nombrarlo dos veces.
+/// </summary>
+public record RemitenteContratante(
+    string TipoDocumento,
+    string NumeroDocumento,
+    string RazonSocial);
 
 /// <summary>Un bien trasladado.</summary>
 public record BienTrasladado(
@@ -150,10 +252,33 @@ public record DocumentoRelacionadoGre(
 /// </summary>
 public sealed class GuiaRemision
 {
+    /// <summary>
+    /// Catálogo 01: "09" del remitente, "31" del transportista.
+    ///
+    /// LAS DOS SON EL MISMO XML CON LAS PARTES CAMBIADAS DE SITIO, y por eso
+    /// viven en la misma clase en vez de en dos:
+    ///
+    ///   09  la emite quien MANDA los bienes.  Serie T###.
+    ///       Él es el DespatchSupplierParty, y si contrata transporte,
+    ///       nombra al transportista en CarrierParty.
+    ///
+    ///   31  la emite quien los LLEVA.  Serie V###.
+    ///       Él es el DespatchSupplierParty, y tiene que nombrar al
+    ///       remitente en OriginatorCustomerParty y referenciar la guía 09
+    ///       de ese remitente.
+    ///
+    /// En un traslado con transportista contratado existen LAS DOS, una por
+    /// cada empresa, y las dos tienen que estar aceptadas antes de que el
+    /// camión salga.
+    /// </summary>
+    public string TipoGuia { get; set; } = CatalogosGre.TipoGuiaRemitente;
+
+    public bool EsTransportista => TipoGuia == CatalogosGre.TipoGuiaTransportista;
+
     public string Serie { get; set; } = "";
     public int Correlativo { get; set; }
 
-    public DateTime FechaEmision { get; set; } = DateTime.Today;
+    public DateTime FechaEmision { get; set; } = RelojPeru.Hoy;
 
     /// <summary>
     /// Cuándo empieza el traslado.
@@ -161,7 +286,7 @@ public sealed class GuiaRemision
     /// No puede ser anterior a la emisión: la guía se emite antes de mover
     /// los bienes, no después.
     /// </summary>
-    public DateTime FechaTraslado { get; set; } = DateTime.Today;
+    public DateTime FechaTraslado { get; set; } = RelojPeru.Hoy;
 
     public Emisor Remitente { get; set; } = new();
 
@@ -189,11 +314,85 @@ public sealed class GuiaRemision
     /// <summary>Solo cuando la modalidad es pública.</summary>
     public Transportista? Transportista { get; set; }
 
+    /// <summary>
+    /// Cuándo se le entregaron los bienes al transportista.
+    ///
+    /// OBLIGATORIO EN TRANSPORTE PÚBLICO (error 3617), y es un dato que no
+    /// existe en el transporte privado porque allí no hay entrega: la misma
+    /// empresa carga y lleva.
+    ///
+    /// SUNAT lo quiere para saber desde cuándo la mercancía está en manos del
+    /// transportista, que es quien responde a partir de ese momento.
+    ///
+    /// Si no se indica, se usa la fecha de traslado: lo normal es entregar
+    /// la carga el mismo día que sale.
+    /// </summary>
+    public DateTime? FechaEntregaAlTransportista { get; set; }
+
+    /// <summary>
+    /// La fecha que se declara, resolviendo el valor por defecto.
+    /// </summary>
+    public DateTime FechaEntregaEfectiva =>
+        FechaEntregaAlTransportista ?? FechaTraslado;
+
     /// <summary>Solo cuando la modalidad es privada.</summary>
     public Vehiculo? Vehiculo { get; set; }
 
     /// <summary>Solo cuando la modalidad es privada.</summary>
     public Conductor? Conductor { get; set; }
+
+    // ------------------------------------------- solo en la guía del transportista
+
+    /// <summary>
+    /// El remitente: de quién son los bienes. Obligatorio en la 31.
+    ///
+    /// VA DENTRO DEL PUNTO DE PARTIDA, en Delivery/Despatch/DespatchParty, y
+    /// no en un bloque de partes propio. Es quien despacha desde ese punto.
+    /// </summary>
+    public RemitenteContratante? Contratante { get; set; }
+
+    /// <summary>
+    /// Quien paga el flete, cuando no es ni el remitente ni el emisor.
+    ///
+    /// Va en OriginatorCustomerParty —que a pesar del nombre NO es el
+    /// remitente— y solo tiene sentido junto al indicador
+    /// SUNAT_Envio_IndicadorPagadorFlete_Tercero.
+    /// </summary>
+    public RemitenteContratante? PagadorFlete { get; set; }
+
+    /// <summary>
+    /// Número de registro del transportista en el MTC.
+    ///
+    /// Obligatorio en la 31 (error 3353): es lo que acredita que la empresa
+    /// puede prestar servicio de transporte de carga. El remitente no lo
+    /// tiene porque no es transportista.
+    /// </summary>
+    public string? NumeroMtc { get; set; }
+
+    /// <summary>
+    /// Conductores de relevo, si el viaje los lleva.
+    ///
+    /// El principal va en Conductor. Estos salen con JobTitle "Secundario",
+    /// y SUNAT exige la licencia de cada uno igual que la del principal.
+    /// </summary>
+    public List<Conductor> ConductoresSecundarios { get; set; } = [];
+
+    /// <summary>
+    /// Indicadores del catálogo de SUNAT que modifican el traslado.
+    ///
+    /// Son cadenas literales que se declaran tal cual, y están en
+    /// IndicadorGre. El más frecuente es el de subcontratación.
+    /// </summary>
+    public List<string> Indicadores { get; set; } = [];
+
+    /// <summary>
+    /// El transportista al que se subcontrató, cuando el emisor no lleva la
+    /// carga él mismo.
+    ///
+    /// Va acompañado del indicador de transporte subcontratado: sin él SUNAT
+    /// no entiende qué pinta ese tercero en el documento (error 4424).
+    /// </summary>
+    public Transportista? OperadorSubcontratado { get; set; }
 
     public List<BienTrasladado> Bienes { get; set; } = [];
 
@@ -212,8 +411,14 @@ public sealed class GuiaRemision
 
     public string Numero => $"{Serie}-{Correlativo:D8}";
 
-    public string NombreArchivo =>
-        $"{Remitente.Ruc}-{CatalogosGre.TipoGuiaRemitente}-{Numero}";
+    /// <summary>
+    /// El nombre del archivo que se le manda a SUNAT.
+    ///
+    /// LLEVA EL TIPO DENTRO, y por eso esto es lo único que el worker
+    /// necesitaba para empezar a mandar guías de transportista: el resto del
+    /// canal —el ZIP, el envío REST, la consulta del ticket— es idéntico.
+    /// </summary>
+    public string NombreArchivo => $"{Remitente.Ruc}-{TipoGuia}-{Numero}";
 
     /// <summary>
     /// Comprueba lo que se puede comprobar antes de enviar.
@@ -227,10 +432,33 @@ public sealed class GuiaRemision
     {
         var problemas = new List<string>();
 
-        if (string.IsNullOrWhiteSpace(Serie) || Serie.Length != 4 || Serie[0] != 'T')
+        // LA SERIE DICE QUÉ GUÍA ES, y no son intercambiables: una T en una
+        // guía de transportista es un rechazo inmediato.
+        var inicial = EsTransportista ? 'V' : 'T';
+
+        if (string.IsNullOrWhiteSpace(Serie) || Serie.Length != 4 ||
+            char.ToUpperInvariant(Serie[0]) != inicial)
+        {
             problemas.Add(
-                "La serie de una guía de remitente debe empezar por T y tener " +
-                "cuatro caracteres, como T001. Lo exige SUNAT.");
+                $"La serie de una guía de {(EsTransportista ? "transportista" : "remitente")} " +
+                $"debe empezar por {inicial} y tener cuatro caracteres, como " +
+                $"{inicial}001. Lo exige SUNAT.");
+        }
+
+        if (TipoGuia != CatalogosGre.TipoGuiaRemitente &&
+            TipoGuia != CatalogosGre.TipoGuiaTransportista)
+        {
+            problemas.Add(
+                $"El tipo de guía '{TipoGuia}' no existe. Solo hay dos: '09' " +
+                $"del remitente y '31' del transportista.");
+        }
+
+        foreach (var indicador in Indicadores.Where(i => !IndicadorGre.EsValido(i)))
+        {
+            problemas.Add(
+                $"El indicador '{indicador}' no es válido: todos empiezan por " +
+                $"'SUNAT_' y SUNAT los compara carácter a carácter (regla 3388).");
+        }
 
         if (Correlativo < 0)
             problemas.Add("El correlativo debe ser mayor que cero.");
@@ -253,6 +481,16 @@ public sealed class GuiaRemision
         if (!CatalogosGre.ModalidadTraslado.EsValido(ModalidadTraslado))
             problemas.Add($"La modalidad '{ModalidadTraslado}' no existe. Usa 01 o 02.");
 
+        // LA GUÍA DEL TRANSPORTISTA TIENE OTRAS EXIGENCIAS, y ninguna de las
+        // de abajo: él SIEMPRE lleva la carga, así que la modalidad no le
+        // aplica y el vehículo y el conductor nunca son opcionales.
+        if (EsTransportista)
+        {
+            RevisarTransportista(problemas);
+
+            return problemas;
+        }
+
         // Cada modalidad exige datos distintos, y esta es la confusión más
         // habitual al empezar con guías.
         if (ModalidadTraslado == CatalogosGre.ModalidadTraslado.Publico)
@@ -261,6 +499,16 @@ public sealed class GuiaRemision
                 problemas.Add(
                     "En transporte público hay que declarar al transportista. " +
                     "Además, él debe emitir su propia guía (tipo 31).");
+
+            // La entrega no puede ser posterior al inicio del traslado: no se
+            // puede mover lo que todavía no se ha entregado.
+            if (FechaEntregaEfectiva.Date > FechaTraslado.Date)
+            {
+                problemas.Add(
+                    $"La fecha de entrega al transportista " +
+                    $"({FechaEntregaEfectiva:yyyy-MM-dd}) es posterior al inicio " +
+                    $"del traslado ({FechaTraslado:yyyy-MM-dd}).");
+            }
         }
         else
         {
@@ -338,6 +586,146 @@ public sealed class GuiaRemision
         }
 
         return problemas;
+    }
+
+    /// <summary>
+    /// Lo que solo exige la guía del transportista.
+    ///
+    /// SE LLAMA DESPUÉS de las comprobaciones comunes —fechas, motivo, peso,
+    /// bienes, ubigeos— y sustituye a las de modalidad, que aquí no pintan
+    /// nada: el transportista siempre lleva la carga.
+    /// </summary>
+    private void RevisarTransportista(List<string> problemas)
+    {
+        // --- Quién contrató el traslado ---------------------------------------
+
+        if (Contratante is null)
+        {
+            problemas.Add(
+                "Falta el remitente que contrató el traslado. La guía del " +
+                "transportista sola no explica de dónde salieron los bienes, " +
+                "y SUNAT lo exige en OriginatorCustomerParty.");
+        }
+        else if (string.IsNullOrWhiteSpace(Contratante.NumeroDocumento))
+        {
+            problemas.Add("Falta el documento del remitente que contrató.");
+        }
+
+        // --- El registro del MTC ----------------------------------------------
+
+        if (string.IsNullOrWhiteSpace(NumeroMtc))
+        {
+            problemas.Add(
+                "Falta el número de registro del MTC del transportista " +
+                "(error 3353). Es lo que acredita que la empresa puede " +
+                "prestar servicio de transporte de carga.");
+        }
+
+        // --- El vehículo -------------------------------------------------------
+        //
+        // Aquí NO hay exención por vehículo menor: eso es del remitente. Un
+        // transportista declara siempre placa y habilitación.
+
+        if (Vehiculo is null || string.IsNullOrWhiteSpace(Vehiculo.Placa))
+        {
+            problemas.Add(
+                "Falta la placa del vehículo (error 2567).");
+        }
+        else if (string.IsNullOrWhiteSpace(Vehiculo.Tuc))
+        {
+            problemas.Add(
+                "Falta el número de certificado de habilitación vehicular " +
+                "(error 3355). No es la tarjeta de propiedad: es el documento " +
+                "que habilita ese camión para transporte de carga.");
+        }
+
+        if (Vehiculo is not null &&
+            !string.IsNullOrWhiteSpace(Vehiculo.NumeroAutorizacion) &&
+            string.IsNullOrWhiteSpace(Vehiculo.EntidadAutorizadora))
+        {
+            problemas.Add(
+                "Se declara una autorización especial sin decir qué entidad " +
+                "la dio (error 4407). Catálogo 37: '01' MTC, '02' Produce, " +
+                "'03' Digesa, '04' Senasa, '06' MINEM, '07' Sucamec.");
+        }
+
+        // --- Los conductores ---------------------------------------------------
+
+        if (Conductor is null || string.IsNullOrWhiteSpace(Conductor.Licencia))
+        {
+            problemas.Add(
+                "Falta el conductor principal con su licencia (error 2573).");
+        }
+
+        foreach (var (c, i) in ConductoresSecundarios.Select((c, i) => (c, i + 1)))
+        {
+            if (string.IsNullOrWhiteSpace(c.Licencia))
+                problemas.Add($"Al conductor secundario {i} le falta la licencia.");
+
+            if (string.IsNullOrWhiteSpace(c.NumeroDocumento))
+                problemas.Add($"Al conductor secundario {i} le falta el documento.");
+        }
+
+        // --- La guía del remitente ---------------------------------------------
+        //
+        // REGLA 2574, y es la que más sorprende: la 31 no vive sola. Tiene que
+        // decir qué guía 09 está amparando, porque es esa la que declara de
+        // quién son los bienes.
+        //
+        // La única excepción es el transbordo programado, donde el tramo puede
+        // empezar antes de que exista la 09.
+
+        var amparaUnaGuia = DocumentosRelacionados
+            .Any(d => d.TipoDocumento == CatalogosGre.TipoGuiaRemitente);
+
+        var esTransbordo = Indicadores.Contains(IndicadorGre.TransbordoProgramado);
+
+        if (!amparaUnaGuia && !esTransbordo)
+        {
+            problemas.Add(
+                "La guía del transportista tiene que referenciar la guía del " +
+                "remitente que ampara: un documento relacionado de tipo '09' " +
+                "con su número y el RUC de quien la emitió (error 2574). " +
+                "Solo se puede omitir en un transbordo programado.");
+        }
+
+        // --- Quién paga el flete ------------------------------------------------
+
+        var pagaUnTercero = Indicadores.Contains(IndicadorGre.PagaFleteTercero);
+
+        if (pagaUnTercero && PagadorFlete is null)
+        {
+            problemas.Add(
+                "Se declara que el flete lo paga un tercero pero no se dice " +
+                "quién (error 4401).");
+        }
+
+        if (!pagaUnTercero && PagadorFlete is not null)
+        {
+            problemas.Add(
+                "Se declara un pagador del flete sin el indicador " +
+                $"'{IndicadorGre.PagaFleteTercero}'.");
+        }
+
+        // --- La subcontratación -------------------------------------------------
+
+        var declaraSubcontrata =
+            Indicadores.Contains(IndicadorGre.TransporteSubcontratado);
+
+        if (declaraSubcontrata && OperadorSubcontratado is null)
+        {
+            problemas.Add(
+                "Se declara transporte subcontratado pero no se dice a quién " +
+                "(error 3390).");
+        }
+
+        if (!declaraSubcontrata && OperadorSubcontratado is not null)
+        {
+            problemas.Add(
+                "Se declara un transportista subcontratado sin el indicador " +
+                $"'{IndicadorGre.TransporteSubcontratado}'. Sin él SUNAT no " +
+                "entiende qué pinta ese tercero en el documento (error 4424).");
+        }
     }
 
     private static bool EsUbigeo(string? valor) =>

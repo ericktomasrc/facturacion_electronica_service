@@ -1,0 +1,71 @@
+<Project>
+
+  <!--
+    ADVERTENCIAS QUE PASAN A SER ERRORES.
+
+    Este archivo va en la RAÍZ de la solución, al lado del .sln. MSBuild lo
+    aplica solo a todos los proyectos que cuelgan de ahí: no hay que tocar
+    ningún .csproj, y los proyectos que se creen mañana lo heredan.
+
+    POR QUÉ ESTAS OCHO Y NO TODAS:
+
+    Poner TreatWarningsAsErrors a secas convierte en error cualquier cosa,
+    incluida una variable sin usar o un comentario XML incompleto. Eso
+    termina en alguien poniendo #pragma warning disable por toda la base de
+    código, que es peor que no tener nada.
+
+    Las de esta lista comparten una característica: todas significan "este
+    código no hace lo que parece que hace". No son cuestión de estilo ni de
+    prolijidad. Son código muerto disfrazado de código vivo.
+
+    El 19 de setiembre de 2026 perdimos una hora persiguiendo un fallo donde
+    AfectacionIgv.EsExportacion devolvía siempre false. El compilador lo
+    había avisado con CS0184 y CS7023, y las dos líneas se perdieron entre
+    las siete líneas verdes de un build correcto.
+  -->
+
+  <PropertyGroup>
+    <WarningsAsErrors>
+      $(WarningsAsErrors);
+      CS0183;
+      CS0184;
+      CS0252;
+      CS0253;
+      CS0472;
+      CS1718;
+      CS7023;
+      CS8073
+    </WarningsAsErrors>
+  </PropertyGroup>
+
+  <!--
+    QUÉ SIGNIFICA CADA UNA, para cuando alguna salte:
+
+    CS0183  La expresión SIEMPRE es del tipo dado.
+            El "is" sobra: o es redundante, o el tipo no es el que crees.
+
+    CS0184  La expresión NUNCA es del tipo dado.
+            La condición jamás se cumple. Esta es la que nos mordió.
+
+    CS0252  Comparación de referencias no intencionada en el lado izquierdo.
+            Estás comparando direcciones de memoria donde querías comparar
+            contenidos. Con cadenas cortas a veces "funciona" por accidente,
+            porque .NET las reutiliza; con cadenas largas deja de funcionar.
+
+    CS0253  Lo mismo, del lado derecho.
+
+    CS0472  El resultado de comparar con null siempre es el mismo.
+            Preguntar si un int es null: nunca lo es.
+
+    CS1718  Comparación de una variable consigo misma.
+            Casi siempre es un nombre mal escrito al copiar y pegar.
+
+    CS7023  El operando de "is" o "as" es un tipo estático.
+            Esto es exactamente lo de esta noche: creías comparar contra una
+            constante y estabas preguntando por una clase.
+
+    CS8073  El resultado siempre es false/true al comparar un tipo por valor
+            con null. Mismo espíritu que CS0472.
+  -->
+
+</Project>

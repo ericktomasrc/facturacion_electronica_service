@@ -42,7 +42,7 @@ public record TrabajoGuia(
 /// probado.
 /// </summary>
 public sealed class RepositorioGuias
-{ 
+{
     private readonly FabricaSesiones _sesiones;
     private readonly string _cadenaOperador;
 
@@ -127,7 +127,14 @@ public sealed class RepositorioGuias
                    AND activo
                 RETURNING ultimo_correlativo
                 """,
-                new { tenantId, tipo = CatalogosGre.TipoGuiaRemitente, serie = guia.Serie },
+                // EL TIPO SALE DE LA GUÍA, no de una constante.
+                //
+                // Estaba fijo en "09", y por eso la primera guía de
+                // transportista no encontraba su serie V001 aunque estuviera
+                // dada de alta: se estaba buscando una V001 de tipo 09, que
+                // no existe. El mensaje decía "la serie no existe", que era
+                // verdad y no ayudaba nada.
+                new { tenantId, tipo = guia.TipoGuia, serie = guia.Serie },
                 sesion.Transaccion, cancellationToken: ct));
 
         if (correlativo is null)
@@ -160,7 +167,7 @@ public sealed class RepositorioGuias
             new
             {
                 tenantId,
-                tipo = CatalogosGre.TipoGuiaRemitente,
+                tipo = guia.TipoGuia,
                 serie = guia.Serie,
                 correlativo = guia.Correlativo,
                 fechaEmision = DateOnly.FromDateTime(guia.FechaEmision),
@@ -184,7 +191,7 @@ public sealed class RepositorioGuias
         await sesion.ConfirmarAsync(ct);
 
         return new GuiaGuardada(
-            id, guia.Numero, CatalogosGre.TipoGuiaRemitente, "BORRADOR",
+            id, guia.Numero, guia.TipoGuia, "BORRADOR",
             guia.FechaEmision, guia.FechaTraslado,
             guia.Destinatario.RazonSocial, null, null, null);
     }
@@ -397,6 +404,83 @@ public sealed class RepositorioGuias
 
         await sesion.ConfirmarAsync(ct);
         return filas.ToList();
+    }
+
+    // ------------------------------------------------------------- anulación
+
+    /// <summary>
+    /// Lo que hace falta saber de una guía antes de registrar su anulación.
+    /// </summary>
+    public record GuiaParaAnular(
+        string TipoGuia, string Serie, string Numero,
+        string Estado, DateTime FechaEmision);
+
+    public async Task<GuiaParaAnular?> ObtenerParaAnularAsync(
+        Guid tenantId, Guid guiaId, CancellationToken ct = default)
+    {
+        await using var sesion = await _sesiones.AbrirAsync(tenantId, ct);
+
+        var fila = await sesion.Conexion.QuerySingleOrDefaultAsync<GuiaParaAnular>(
+            new CommandDefinition(
+                """
+                SELECT tipo_guia AS "TipoGuia",
+                       serie     AS "Serie",
+                       serie || '-' || lpad(correlativo::text, 8, '0') AS "Numero",
+                       estado    AS "Estado",
+                       fecha_emision AS "FechaEmision"
+                  FROM guias
+                 WHERE id = @guiaId
+                """,
+                new { guiaId }, sesion.Transaccion, cancellationToken: ct));
+
+        await sesion.ConfirmarAsync(ct);
+        return fila;
+    }
+
+    /// <summary>
+    /// Registra que una guía se anuló en SUNAT.
+    ///
+    /// ESTO NO ANULA NADA. SUNAT no publica servicio de baja para guías: la
+    /// anula una persona con Clave SOL, y esto deja constancia de que ocurrió
+    /// para que el panel y las facturas posteriores dejen de contarla.
+    ///
+    /// El UPDATE lleva la condición del estado dentro a propósito: si entre
+    /// la comprobación y la escritura otro proceso cambió la guía, esta
+    /// escritura no la pisa y el llamador se entera porque no afectó a
+    /// ninguna fila.
+    /// </summary>
+    public async Task<bool> RegistrarAnulacionAsync(
+        Guid tenantId,
+        Guid guiaId,
+        DateTime fechaAnulacion,
+        string motivo,
+        string registradaPor,
+        CancellationToken ct = default)
+    {
+        await using var sesion = await _sesiones.AbrirAsync(tenantId, ct);
+
+        var filas = await sesion.Conexion.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE guias
+               SET estado         = 'ANULADO',
+                   anulada_en     = @fecha,
+                   anulada_motivo = @motivo,
+                   anulada_por    = @por,
+                   proximo_intento_en = NULL
+             WHERE id = @guiaId
+               AND estado IN ('ACEPTADO', 'ACEPTADO_CON_OBSERVACIONES')
+            """,
+            new
+            {
+                guiaId,
+                fecha = DateOnly.FromDateTime(fechaAnulacion),
+                motivo,
+                por = registradaPor
+            },
+            sesion.Transaccion, cancellationToken: ct));
+
+        await sesion.ConfirmarAsync(ct);
+        return filas > 0;
     }
 
     /// <summary>Rutas de los archivos, para descargarlos.</summary>

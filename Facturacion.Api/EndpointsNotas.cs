@@ -233,7 +233,7 @@ public static class EndpointsNotas
     private static NotaCredito ConstruirCredito(PeticionNota p, TenantResuelto t) => new()
     {
         Serie = p.Serie.ToUpperInvariant(),
-        FechaEmision = p.FechaEmision ?? DateTime.Now,
+        FechaEmision = p.FechaEmision ?? RelojPeru.Ahora,
         Moneda = p.Moneda,
         TipoCambio = MapearTipoCambio(p.TipoCambio),
         CodigoMotivo = p.CodigoMotivo,
@@ -251,7 +251,7 @@ public static class EndpointsNotas
     private static NotaDebito ConstruirDebito(PeticionNota p, TenantResuelto t) => new()
     {
         Serie = p.Serie.ToUpperInvariant(),
-        FechaEmision = p.FechaEmision ?? DateTime.Now,
+        FechaEmision = p.FechaEmision ?? RelojPeru.Ahora,
         Moneda = p.Moneda,
         TipoCambio = MapearTipoCambio(p.TipoCambio),
         CodigoMotivo = p.CodigoMotivo,
@@ -297,7 +297,16 @@ public static class EndpointsNotas
             ValorUnitario = l.ValorUnitario,
             DescuentoPorcentaje = l.DescuentoPorcentaje,
             TipoAfectacionIgv = l.TipoAfectacionIgv,
+
+            // La tasa la decide la afectación: 4% el arroz pilado, 18% el
+            // resto. Si el cliente la manda, manda la suya.
             PorcentajeIgv = l.PorcentajeIgv
+                ?? AfectacionIgv.TasaPorDefecto(l.TipoAfectacionIgv),
+
+            AfectoIcbper = l.AfectoIcbper,
+            IcbperUnitario = l.IcbperUnitario,
+            SistemaIsc = l.SistemaIsc,
+            TasaIsc = l.TasaIsc
         }).ToList();
 
     private static TipoCambio? MapearTipoCambio(TipoCambioDto? dto) =>
@@ -306,6 +315,6 @@ public static class EndpointsNotas
             MonedaOrigen = dto.MonedaOrigen,
             MonedaDestino = dto.MonedaDestino,
             Tasa = dto.Tasa,
-            Fecha = dto.Fecha ?? DateTime.Today
+            Fecha = dto.Fecha ?? RelojPeru.Hoy
         };
 }

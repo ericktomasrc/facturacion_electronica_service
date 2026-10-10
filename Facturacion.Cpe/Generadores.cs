@@ -30,10 +30,11 @@ public static class GeneradorFacturaXml
 
             // EL TIPO DE OPERACIÓN VA COMO ATRIBUTO listID.
             //
-            // Es lo que le dice a SUNAT que esta factura está sujeta a
-            // detracción. Sin él, los bloques de detracción se ignoran y la
-            // factura sale como una venta normal, sin que nadie lo note hasta
-            // que el cliente reclame el depósito que nunca llegó.
+            // Es lo que le dice a SUNAT qué clase de operación es esta: venta
+            // interna, sujeta a detracción o exportación. De ese único
+            // atributo dependen validaciones que no se parecen en nada entre
+            // sí, y equivocarlo no produce un error de formato sino una
+            // factura que declara algo distinto de lo que pasó.
             new XElement(Ns.Cbc + "InvoiceTypeCode",
                 new XAttribute("listID", f.TipoOperacionEfectivo),
                 new XAttribute("listAgencyName", "PE:SUNAT"),
@@ -43,17 +44,50 @@ public static class GeneradorFacturaXml
 
             LeyendaImporte(totales.ImporteTotal, f.Moneda),
 
-            // La leyenda que SUNAT exige en toda factura con detracción.
+            // La leyenda obligatoria en cuanto hay una sola línea gratuita.
             //
-            // El texto debe ser exactamente el del catálogo 15: sin ella, la
-            // factura se rechaza.
+            // El texto lo fija SUNAT palabra por palabra, y va atado al total
+            // de gratuitas: si la leyenda aparece y ese total es cero, el
+            // comprobante se rechaza con el 2416.
+            LeyendaSuelta(totales.HayGratuitas,
+                CodigoLeyenda.TransferenciaGratuita, Gratuitas.TextoLeyenda),
+
+            // Arroz pilado. Sin esta leyenda el comprobante se acepta,
+            // pero con la observación 4264 colgando del CDR.
+            LeyendaSuelta(Ivap.Aplica(f), CodigoLeyenda.Ivap, Ivap.TextoLeyenda),
+
+            // La leyenda que SUNAT exige en toda factura con detracción.
             LeyendaDetraccion(f.Detraccion),
 
+            // Drawback: opcional, y solo la pone quien se acoge a la
+            // restitución simplificada de derechos arancelarios.
+            LeyendaSuelta(f.Drawback && f.EsExportacion,
+                CodigoLeyenda.Drawback, Exportacion.TextoDrawback),
+
+            // Exportación de servicios: informativa, no obligatoria.
+            LeyendaSuelta(
+                f.EsExportacion && f.TipoOperacion != TipoOperacion.ExportacionDeBienes,
+                CodigoLeyenda.ExportacionServicios,
+                Exportacion.TextoExportacionServicios),
+
             new XElement(Ns.Cbc + "DocumentCurrencyCode", f.Moneda),
+
+            // Las facturas donde se cobraron los anticipos.
+            //
+            // VAN AQUÍ, ANTES DE LA FIRMA. En UBL todas las referencias a
+            // otros documentos viven en este tramo. Ponerlas junto a los
+            // montos, que es donde la intuición las pondría, rompe el XSD.
+            ReferenciasDeAnticipos(f.Anticipos),
 
             Signature(f),
             Emisor(f.Emisor),
             Receptor(f.Receptor),
+
+            // País donde se aprovecha el servicio exportado. Solo 0201 y 0208.
+            PaisDeUsoDelServicio(
+                TipoOperacion.ExigePaisDeUso(f.TipoOperacionEfectivo)
+                    ? f.PaisDeUso
+                    : null),
 
             // La cuenta donde se deposita la detracción.
             //
@@ -62,13 +96,36 @@ public static class GeneradorFacturaXml
             // error que habla de estructura y no menciona la detracción.
             MediosDePagoDetraccion(f.Detraccion),
 
-            // La forma de pago es obligatoria en facturas.
-            new XElement(Ns.Cac + "PaymentTerms",
-                new XElement(Ns.Cbc + "ID", "FormaPago"),
-                new XElement(Ns.Cbc + "PaymentMeansID", f.FormaPago)),
+            // La forma de pago y, si es a crédito, el monto pendiente y
+            // las cuotas. Desde 2022 lo segundo no es opcional.
+            FormaDePago(f),
 
             // Cuánto se detrae y por qué concepto.
             CondicionesDetraccion(f.Detraccion),
+
+            // El total que el cliente paga de verdad, percepción incluida.
+            //
+            // VA AQUÍ Y NO EN LOS TOTALES porque la percepción no forma
+            // parte del precio de la operación: es un cobro por cuenta de
+            // SUNAT. El LegalMonetaryTotal de abajo sale sin ella.
+            CondicionesPercepcion(f.Percepcion),
+
+            // Cuánto se adelantó, con IGV incluido.
+            MontosAnticipados(f.Anticipos, f.Moneda),
+
+            // Y el mismo anticipo otra vez, ahora SIN IGV, como descuento
+            // sobre la base imponible. Son dos cifras distintas del mismo
+            // hecho, y cada una va donde SUNAT la busca.
+            DescuentosPorAnticipo(f.Moneda, totales),
+
+            // Cargos y descuentos del comprobante entero que no mueven la
+            // base imponible: recargo al consumo, FISE, un descuento
+            // comercial pactado fuera del precio.
+            CargosYDescuentosGlobales(f.CargosGlobales, f.Moneda),
+
+            // El cargo de la percepción. Es lo único del documento que va
+            // en soles aunque la factura esté en otra moneda.
+            CargoPorPercepcion(f.Percepcion),
 
             // Solo aparece si la factura no está en soles.
             TipoDeCambio(f.TipoCambio),
@@ -81,6 +138,56 @@ public static class GeneradorFacturaXml
             raiz.Add(Linea("InvoiceLine", "InvoicedQuantity", f.Moneda, linea));
 
         return new XDocument(new XDeclaration("1.0", "UTF-8", null), raiz);
+    }
+
+    // ------------------------------------------------------------- crédito
+
+    /// <summary>
+    /// La forma de pago, con sus cuotas si las hay.
+    ///
+    /// SON VARIOS cac:PaymentTerms HERMANOS, no uno anidado: el bloque
+    /// "Credito" lleva el monto pendiente, y cada cuota va en su propio
+    /// bloque con el mismo identificador "FormaPago".
+    ///
+    /// Al contado es un solo bloque sin monto, como siempre.
+    /// </summary>
+    private static IEnumerable<XElement> FormaDePago(Factura f)
+    {
+        var esCredito = ReglasCredito.EsCredito(f.FormaPago);
+
+        var cabecera = new XElement(Ns.Cac + "PaymentTerms",
+            new XElement(Ns.Cbc + "ID", "FormaPago"),
+            new XElement(Ns.Cbc + "PaymentMeansID", f.FormaPago));
+
+        // El monto neto pendiente solo existe a crédito. Ponerlo al contado
+        // sería declarar una deuda que no hay.
+        if (esCredito && f.Cuotas.Count > 0)
+        {
+            cabecera.Add(new XElement(Ns.Cbc + "Amount",
+                new XAttribute("currencyID", f.Moneda),
+                f.MontoPendiente.ToString("0.00", Inv)));
+        }
+
+        yield return cabecera;
+
+        if (!esCredito) yield break;
+
+        foreach (var cuota in f.Cuotas.OrderBy(c => c.Numero))
+        {
+            yield return new XElement(Ns.Cac + "PaymentTerms",
+                new XElement(Ns.Cbc + "ID", "FormaPago"),
+
+                // "Cuota001", con tres dígitos siempre. "Cuota1" es el
+                // error 3246.
+                new XElement(Ns.Cbc + "PaymentMeansID", cuota.Identificador),
+
+                new XElement(Ns.Cbc + "Amount",
+                    new XAttribute("currencyID", f.Moneda),
+                    cuota.Monto.ToString("0.00", Inv)),
+
+                new XElement(Ns.Cbc + "PaymentDueDate",
+                    cuota.FechaVencimiento.ToString("yyyy-MM-dd", Inv)));
+        }
     }
 
     private static XElement? LeyendaDetraccion(Detraccion? d) =>
@@ -110,8 +217,12 @@ public static class GeneradorFacturaXml
             new XElement(Ns.Cbc + "PaymentMeansCode",
                 new XAttribute("listName", "Medio de pago"),
                 new XAttribute("listAgencyName", "PE:SUNAT"),
-                new XAttribute("listURI",
-                    "urn:pe:gob:catalogo:cpe:codigo:catalogo59"),
+                // ESTA CADENA LLEVABA MAL DESDE EL PASO DE LA DETRACCION.
+                //
+                // Es el formato corto, que SUNAT acepta pero observa con el
+                // 4253. Nunca lo vimos porque el CDR de la detraccion salia
+                // "ACEPTADO" y nadie leyo las observaciones.
+                new XAttribute("listURI", CatalogoUri.C59_MedioPago),
                 d.MedioDePago),
 
             new XElement(Ns.Cac + "PayeeFinancialAccount",
@@ -127,13 +238,8 @@ public static class GeneradorFacturaXml
             new XElement(Ns.Cbc + "ID", "Detraccion"),
 
             // PaymentMeansID NO ADMITE listName, listAgencyName ni listURI.
-            //
-            // Se los puse por analogía con otros elementos del documento, que
-            // sí los llevan, y el XSD los rechazó con un error que nombra el
-            // atributo exacto.
-            //
-            // En UBL cada elemento tiene su propio conjunto de atributos
-            // permitidos: las analogías no valen.
+            // Ponerlos devuelve el rechazo 0306, que habla de un "atributo no
+            // definido" sin decir cuál.
             new XElement(Ns.Cbc + "PaymentMeansID", d.CodigoBienServicio),
 
             new XElement(Ns.Cbc + "PaymentPercent",
@@ -146,6 +252,66 @@ public static class GeneradorFacturaXml
             new XElement(Ns.Cbc + "Amount",
                 new XAttribute("currencyID", "PEN"),
                 d.Monto.ToString("0.00", Inv)));
+    }
+
+    // --------------------------------------------------------- percepción
+
+    /// <summary>
+    /// El cargo de la percepción: cuánto se percibe y sobre qué base.
+    ///
+    /// TRES DETALLES QUE SUNAT COMPRUEBA UNO POR UNO:
+    ///
+    /// 1. ChargeIndicator es "true". Es un CARGO, no un descuento: suma al
+    ///    precio en vez de restarlo. Ponerlo en false devuelve el 3114.
+    ///
+    /// 2. El factor va como 0.02, no como 2. SUNAT recalcula
+    ///    Amount = BaseAmount x MultiplierFactorNumeric y compara (2798).
+    ///
+    /// 3. Las dos cifras van en PEN aunque la factura esté en dólares
+    ///    (errores 2792 y 2788). Es la única excepción del documento.
+    /// </summary>
+    private static XElement? CargoPorPercepcion(Percepcion? p)
+    {
+        if (p is null) return null;
+
+        return new XElement(Ns.Cac + "AllowanceCharge",
+
+            new XElement(Ns.Cbc + "ChargeIndicator", "true"),
+
+            new XElement(Ns.Cbc + "AllowanceChargeReasonCode",
+                new XAttribute("listAgencyName", "PE:SUNAT"),
+                new XAttribute("listName", "Cargo/descuento"),
+                new XAttribute("listURI", CatalogoUri.C53_CargoDescuento),
+                p.CodigoCargo),
+
+            new XElement(Ns.Cbc + "MultiplierFactorNumeric",
+                p.Factor.ToString("0.#####", Inv)),
+
+            new XElement(Ns.Cbc + "Amount",
+                new XAttribute("currencyID", "PEN"),
+                p.Monto.ToString("0.00", Inv)),
+
+            new XElement(Ns.Cbc + "BaseAmount",
+                new XAttribute("currencyID", "PEN"),
+                p.BaseEnSoles.ToString("0.00", Inv)));
+    }
+
+    /// <summary>
+    /// El total que el cliente paga con la percepción incluida.
+    ///
+    /// El identificador literal "Percepcion" es lo que SUNAT busca para
+    /// reconocer el bloque (regla 3309), igual que "Detraccion" más arriba.
+    /// No es un nombre nuestro y no admite variantes con tilde.
+    /// </summary>
+    private static XElement? CondicionesPercepcion(Percepcion? p)
+    {
+        if (p is null) return null;
+
+        return new XElement(Ns.Cac + "PaymentTerms",
+            new XElement(Ns.Cbc + "ID", "Percepcion"),
+            new XElement(Ns.Cbc + "Amount",
+                new XAttribute("currencyID", "PEN"),
+                p.TotalConPercepcion.ToString("0.00", Inv)));
     }
 }
 
@@ -162,7 +328,11 @@ public static class GeneradorFacturaXml
 ///    etiqueta de cantidad.
 /// 6. La nota de débito usa RequestedMonetaryTotal en vez de LegalMonetaryTotal.
 ///
-/// Todo lo demás son los mismos bloques compartidos.
+/// Todo lo demás son los mismos bloques compartidos. Por eso una nota de
+/// crédito sobre una factura de exportación funciona sin tocar nada.
+///
+/// LAS NOTAS NO LLEVAN ANTICIPOS. Una nota modifica un comprobante que ya
+/// declaró los suyos; volver a declararlos aquí los contaría dos veces.
 /// </summary>
 public static class GeneradorNotaXml
 {
@@ -224,6 +394,16 @@ public static class GeneradorNotaXml
 
             LeyendaImporte(totales.ImporteTotal, comprobante.Moneda),
 
+            // Una nota también puede llevar líneas gratuitas: por ejemplo la
+            // que corrige una bonificación mal declarada.
+            LeyendaSuelta(totales.HayGratuitas,
+                CodigoLeyenda.TransferenciaGratuita, Gratuitas.TextoLeyenda),
+
+            // Y una nota sobre una factura de arroz pilado sigue siendo de
+            // arroz pilado.
+            LeyendaSuelta(Ivap.Aplica(comprobante),
+                CodigoLeyenda.Ivap, Ivap.TextoLeyenda),
+
             new XElement(Ns.Cbc + "DocumentCurrencyCode", comprobante.Moneda),
 
             // Por qué se emite esta nota.
@@ -241,6 +421,11 @@ public static class GeneradorNotaXml
             Signature(comprobante),
             Emisor(comprobante.Emisor),
             Receptor(comprobante.Receptor),
+
+            // Una nota puede llevarlos igual que la factura: por ejemplo la
+            // que devuelve el recargo al consumo de un servicio anulado.
+            CargosYDescuentosGlobales(
+                comprobante.CargosGlobales, comprobante.Moneda),
 
             TipoDeCambio(comprobante.TipoCambio),
 

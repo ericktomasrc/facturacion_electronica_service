@@ -125,6 +125,55 @@ public sealed class ProcesadorComprobantes
 
             var bytesXml = ObtenerBytes(firmado);
 
+            // --- 2b. Comprobar la forma contra el esquema --------------------
+            //
+            // VA DESPUÉS DE FIRMAR, y la primera versión lo hacía antes: error.
+            //
+            // Sin la firma, `ExtensionContent` está vacío y el esquema de UBL
+            // exige que lleve algo dentro, así que TODA factura daba este
+            // aviso. Un falso positivo del cien por cien.
+            //
+            // Validar no modifica el documento, de modo que mirarlo ya firmado
+            // no rompe nada y además comprueba exactamente los bytes que se
+            // van a enviar, no una versión parecida.
+            //
+            // Por defecto solo avisa. Ver "AVISA, NO BLOQUEA" en
+            // ValidacionPrevia: ese fallo de arriba es justamente el motivo.
+
+            var problemasEsquema = ValidacionPrevia.Comprobar(bytesXml);
+
+            if (problemasEsquema.Count > 0)
+            {
+                _log.LogWarning(
+                    "{Numero}: el XML no cumple el esquema de SUNAT. {Problemas}",
+                    comprobante.NombreArchivo,
+                    string.Join(" | ", problemasEsquema));
+
+                if (ValidacionPrevia.Bloquea)
+                {
+                    // SE REGISTRA COMO RECHAZADO Y NO COMO FALLO, y la
+                    // diferencia importa: un fallo vuelve a BORRADOR y se
+                    // reintenta, y esto no se va a arreglar solo. El XML está
+                    // mal y mañana estará igual de mal. Necesita que alguien
+                    // corrija los datos.
+                    await _comprobantes.RegistrarCambioAsync(
+                        trabajo.TenantId, trabajo.Id,
+                        new CambioEstado(
+                            EstadoCpe.Rechazado,
+                            Mensaje:
+                                "No se envió: el XML no cumple el esquema de " +
+                                "SUNAT. " + string.Join(" | ", problemasEsquema),
+                            Worker: Environment.MachineName), ct);
+
+                    _log.LogError(
+                        "{Numero} NO se envió por no cumplir el esquema. " +
+                        "El correlativo no se gastó contra SUNAT.",
+                        comprobante.NombreArchivo);
+
+                    return;
+                }
+            }
+
             var rutaXml = await _archivos.GuardarAsync(
                 tenant.Ruc, comprobante.FechaEmision,
                 $"{comprobante.NombreArchivo}.xml", bytesXml, ct);
@@ -142,7 +191,19 @@ public sealed class ProcesadorComprobantes
             // Las credenciales las resuelve el proveedor: en beta usa las de
             // pruebas, en producción descifra las del contribuyente. El worker
             // no necesita saber cuál es cuál.
-            var configuracion = await _credenciales.ObtenerAsync(trabajo.TenantId, ct);
+            var configuracion =
+                (await _credenciales.ObtenerAsync(trabajo.TenantId, ct))
+                    .ParaTipo(comprobante.TipoComprobante);
+
+            // ESA LLAMADA A ParaTipo NO ES DECORATIVA.
+            //
+            // SUNAT no tiene un billService: tiene varios, y cada uno solo
+            // acepta ciertos tipos. El comprobante de retención y el de
+            // percepción van por "otros CPE", no por el de facturas.
+            //
+            // Mandarlos al de facturas devuelve un 0151 que habla del nombre
+            // del archivo ZIP, y el nombre está perfecto: lo que pasa es que
+            // ese servicio no sabe qué es un tipo 20.
 
             var zip = EmpaquetadorZip.Comprimir(comprobante.NombreArchivo, bytesXml);
 
@@ -361,6 +422,23 @@ public sealed class ProcesadorComprobantes
                 JsonSerializer.Deserialize<NotaDebito>(trabajo.CpeJson, OpcionesJson)
                     ?? throw new InvalidOperationException("El JSON del comprobante está vacío."),
 
+            // La liquidación de compra. Se deserializa como cualquier otro,
+            // aunque por dentro no se parezca a ninguno: el vendedor va donde
+            // en una factura va el emisor.
+            LiquidacionCompra.Tipo =>
+                JsonSerializer.Deserialize<LiquidacionCompra>(trabajo.CpeJson, OpcionesJson)
+                    ?? throw new InvalidOperationException("El JSON del comprobante está vacío."),
+
+            // Los dos comprobantes del sistema de retenciones y percepciones.
+            // No tienen líneas: su detalle son facturas de otro.
+            ComprobanteRetencion.Tipo =>
+                JsonSerializer.Deserialize<ComprobanteRetencion>(trabajo.CpeJson, OpcionesJson)
+                    ?? throw new InvalidOperationException("El JSON del comprobante está vacío."),
+
+            ComprobantePercepcion.Tipo =>
+                JsonSerializer.Deserialize<ComprobantePercepcion>(trabajo.CpeJson, OpcionesJson)
+                    ?? throw new InvalidOperationException("El JSON del comprobante está vacío."),
+
             _ => throw new InvalidOperationException(
                 $"Tipo de comprobante no soportado: {trabajo.TipoComprobante}")
         };
@@ -371,6 +449,18 @@ public sealed class ProcesadorComprobantes
             Factura f => GeneradorFacturaXml.Generar(f),
             NotaCredito n => GeneradorNotaXml.Generar(n),
             NotaDebito n => GeneradorNotaXml.Generar(n),
+
+            // OJO CON EL ORDEN DE ESTE SWITCH: la liquidación va antes que
+            // el caso de la boleta solo por legibilidad, pero tiene que estar
+            // por encima del comodín de abajo. Su raíz no es Invoice sino
+            // SelfBilledInvoice, y el generador es otro.
+            LiquidacionCompra lc => GeneradorLiquidacionXml.Generar(lc),
+
+            // Estos dos no son documentos UBL: son esquemas propios de SUNAT,
+            // con su namespace y con versiones distintas (2.0 y 1.0, no 2.1
+            // y 2.0). El generador lo sabe.
+            ComprobanteRetencion r => GeneradorCreXml.Generar(r),
+            ComprobantePercepcion p => GeneradorCreXml.Generar(p),
 
             // Las boletas no se envían de una en una: van en el resumen
             // diario. Ese flujo es otro y lo maneja un proceso distinto.
