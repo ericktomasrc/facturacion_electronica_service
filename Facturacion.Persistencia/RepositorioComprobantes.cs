@@ -46,6 +46,7 @@ public sealed class RepositorioComprobantes
         ComprobanteBase comprobante,
         string? extraJson = null,
         string? idempotencyKey = null,
+        string? correoReceptor = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(comprobante);
@@ -172,11 +173,12 @@ public sealed class RepositorioComprobantes
                 INSERT INTO comprobantes
                     (tenant_id, tipo_comprobante, serie, correlativo,
                      fecha_emision, moneda, importe_total, estado,
-                     cpe, extra, idempotency_key)
+                     cpe, extra, idempotency_key, correo_receptor)
                 VALUES
                     (@tenantId, @tipo, @serie, @correlativo,
                      @fechaEmision, @moneda, @importeTotal, @estado,
-                     CAST(@cpe AS jsonb), CAST(@extra AS jsonb), @idempotencyKey)
+                     CAST(@cpe AS jsonb), CAST(@extra AS jsonb), @idempotencyKey,
+                     @correoReceptor)
                 RETURNING id
                 """,
                 new
@@ -191,7 +193,12 @@ public sealed class RepositorioComprobantes
                     estado = EstadoCpe.Borrador,
                     cpe = cpeJson,
                     extra = string.IsNullOrWhiteSpace(extraJson) ? "{}" : extraJson,
-                    idempotencyKey
+                    idempotencyKey,
+
+                    // Fuera del `cpe` a propósito: no es tributario y no se firma.
+                    correoReceptor = string.IsNullOrWhiteSpace(correoReceptor)
+                        ? null
+                        : correoReceptor.Trim()
                 },
                 sesion.Transaccion, cancellationToken: ct));
 
@@ -450,7 +457,13 @@ public sealed class RepositorioComprobantes
                        mensaje_sunat    AS "MensajeSunat",
                        cpe::text        AS "CpeJson",
                        ruta_xml         AS "RutaXml",
-                       extra::text      AS "ExtraJson"
+                       extra::text      AS "ExtraJson",
+
+                       -- tenants no tiene RLS y facturacion_app puede
+                       -- leerla. El filtro por tenant ya lo puso la fila
+                       -- de comprobantes, que sí lo tiene.
+                       (SELECT t.logo_ruta FROM tenants t
+                         WHERE t.id = comprobantes.tenant_id) AS "LogoRuta"
                   FROM comprobantes
                  WHERE id = @comprobanteId
                 """,

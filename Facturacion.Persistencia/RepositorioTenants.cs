@@ -155,6 +155,9 @@ public sealed class RepositorioTenants
                        activo           AS "Activo"
                   FROM tenants
                  WHERE ruc = @ruc
+                   -- Desde la 024 puede haber varias filas con el mismo RUC:
+                   -- las abandonadas y, como mucho, una vigente.
+                   AND estado_alta <> 'abandonada'
                 """,
                 new { ruc }, cancellationToken: ct));
     }

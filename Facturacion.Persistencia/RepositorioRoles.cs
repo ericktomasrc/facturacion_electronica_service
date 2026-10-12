@@ -28,6 +28,9 @@ public static class Permiso
     public const string CertificadosGestionar = "certificados.gestionar";
     public const string ProduccionCambiar = "produccion.cambiar";
 
+    /// <summary>Emitir y revocar claves de alta (migración 024).</summary>
+    public const string AltasGestionar = "altas.gestionar";
+
     public const string UsuariosGestionar = "usuarios.gestionar";
     public const string AuditoriaVer = "auditoria.ver";
 

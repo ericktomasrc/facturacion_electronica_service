@@ -144,4 +144,8 @@ public record DatosParaPdf(
     // la consulta de ObtenerParaPdfAsync: Dapper busca un constructor que
     // encaje con TODAS las columnas devueltas, y si no lo encuentra falla al
     // pedir el PDF, no al compilar.
-    string? ExtraJson);
+    string? ExtraJson,
+
+    // Dónde está el logo de la empresa en el almacén (tenants.logo_ruta,
+    // migración 020). Null si no tiene: el PDF sale sin logo, como antes.
+    string? LogoRuta);

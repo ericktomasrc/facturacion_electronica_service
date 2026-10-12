@@ -272,6 +272,75 @@
             color: var(--tenue);
         }
 
+        /* Motivo de un enlace revocado: botón pequeño y nube al pulsarlo */
+        .revocado {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+            .revocado .fecha {
+                font-size: 12px;
+                color: var(--tenue);
+                white-space: nowrap;
+            }
+
+        button.ver-motivo {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 22px;
+            padding: 0;
+            border-radius: 6px;
+            color: var(--tenue);
+            background: var(--panel);
+            border: 1px solid var(--borde);
+        }
+
+            button.ver-motivo:hover,
+            button.ver-motivo[aria-expanded="true"] {
+                color: var(--acento);
+                border-color: var(--acento);
+                background: var(--acento-fondo);
+            }
+
+        .nube-motivo {
+            position: absolute;
+            top: calc(100% + 6px);
+            right: 0;
+            z-index: 20;
+            width: 280px;
+            max-height: 180px;
+            overflow-y: auto;
+            background: var(--panel);
+            border: 1px solid var(--borde-fuerte);
+            border-radius: var(--radio);
+            box-shadow: 0 8px 24px rgba(0,0,0,.14);
+            padding: 10px 12px;
+            font-size: 12.5px;
+            line-height: 1.45;
+            color: var(--texto);
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+        }
+
+            .nube-motivo[hidden] {
+                display: none;
+            }
+
+            .nube-motivo .titulo {
+                display: block;
+                font-size: 11px;
+                text-transform: uppercase;
+                letter-spacing: .05em;
+                color: var(--tenue);
+                margin-bottom: 4px;
+                white-space: normal;
+            }
+
 
         .usuario {
             display: flex;
@@ -355,6 +424,10 @@
                 border-left-color: var(--mal);
             }
 
+            .flotante.ok {
+                border-left-color: var(--ok);
+            }
+
             .flotante .t {
                 font-weight: 500;
             }
@@ -403,6 +476,87 @@
                 margin-bottom: 16px;
             }
 
+            /* Ventana para anular enlaces del portal. Va encima del detalle,
+               por eso su velo tiene un z-index mayor. */
+            #velo-anular {
+                z-index: 80;
+            }
+
+            .modal textarea {
+                width: 100%;
+                font: inherit;
+                font-size: 14px;
+                color: var(--texto);
+                background: var(--panel);
+                border: 1px solid var(--borde);
+                border-radius: var(--radio);
+                padding: 9px 11px;
+                resize: vertical;
+                min-height: 74px;
+            }
+
+                .modal textarea:focus {
+                    outline: none;
+                    border-color: var(--acento);
+                }
+
+            .modal .aviso-modal {
+                background: var(--mal-fondo);
+                color: var(--mal);
+                border-radius: var(--radio);
+                padding: 10px 13px;
+                font-size: 13.5px;
+                margin-bottom: 16px;
+                line-height: 1.5;
+            }
+
+            .modal .sugerencias {
+                display: flex;
+                gap: 6px;
+                flex-wrap: wrap;
+                margin: 8px 0 4px;
+            }
+
+                .modal .sugerencias button {
+                    font-size: 12.5px;
+                    padding: 4px 10px;
+                    border-radius: 999px;
+                    color: var(--tenue);
+                    background: var(--sutil);
+                    border-color: var(--sutil);
+                }
+
+                    .modal .sugerencias button:hover {
+                        color: var(--texto);
+                        border-color: var(--borde-fuerte);
+                    }
+
+            .modal .error-campo {
+                color: var(--mal);
+                font-size: 12.5px;
+                min-height: 18px;
+                margin-top: 4px;
+            }
+
+            .modal .botones {
+                display: flex;
+                gap: 8px;
+                justify-content: flex-end;
+                margin-top: 14px;
+            }
+
+            button.peligro-lleno {
+                background: var(--mal);
+                border-color: var(--mal);
+                color: #fff;
+                font-weight: 500;
+            }
+
+                button.peligro-lleno:hover:not(:disabled) {
+                    filter: brightness(1.08);
+                    border-color: var(--mal);
+                }
+
             .modal .cerrar {
                 display: flex;
                 justify-content: flex-end;
@@ -413,6 +567,37 @@
 <body>
 
     <div id="avisos"></div>
+
+    <div class="velo" id="velo-anular" role="dialog" aria-modal="true" aria-labelledby="an-titulo">
+        <div class="modal" style="max-width:480px">
+            <h3 id="an-titulo">Revocar enlaces del portal</h3>
+            <div class="sub" id="an-sub"></div>
+
+            <div class="aviso-modal">
+                Los enlaces dejan de abrir de inmediato, también el del correo que
+                recibió el cliente. <strong>El comprobante no cambia</strong>: sigue
+                aceptado ante SUNAT, y el cliente puede seguir buscándolo con sus
+                datos en el portal.
+            </div>
+
+            <label for="an-motivo">Motivo</label>
+            <textarea id="an-motivo" maxlength="300"
+                      placeholder="Queda guardado junto al enlace"></textarea>
+
+            <div class="sugerencias" id="an-sugerencias">
+                <button type="button">El correo se envió a una dirección equivocada</button>
+                <button type="button">Lo pidió el cliente</button>
+                <button type="button">Prueba</button>
+            </div>
+
+            <div class="error-campo" id="an-error"></div>
+
+            <div class="botones">
+                <button type="button" id="an-cancelar">Cancelar</button>
+                <button type="button" id="an-aceptar" class="peligro-lleno">Revocar enlaces</button>
+            </div>
+        </div>
+    </div>
 
     <div class="velo" id="velo-detalle">
         <div class="modal">
@@ -963,11 +1148,223 @@
               <td class="tenue" style="white-space:nowrap">
                 ${fechaHora(h.fecha)}</td>
             </tr>`).join("")}
-          </table>`;
+          </table>
+          <div id="d-portal"></div>`;
+
+                cargarPortal(id);
 
             } catch (e) {
                 elem("d-cuerpo").innerHTML =
                     `<div class="vacio" style="color:var(--mal)">${esc(e.message)}</div>`;
+            }
+        }
+
+        // ------------------------------------------------- portal del receptor
+        //
+        // Qué correo de entrega salió de este comprobante y qué enlaces del
+        // portal tiene. Anular es para el correo enviado a la dirección
+        // equivocada o el cliente que lo pide: el enlace deja de abrir, y
+        // queda escrito por qué.
+
+        const ESTADO_CORREO = {
+            ENVIADO: ["i-ok", "enviado"],
+            PENDIENTE: ["i-aviso", "pendiente"],
+            AGOTADO: ["i-mal", "no se pudo enviar"],
+            OMITIDO: ["i-tenue", "no se envió"]
+        };
+
+        async function cargarPortal(id) {
+            const caja = elem("d-portal");
+            if (!caja) return;
+
+            let datos;
+            try {
+                datos = await api(`/admin/comprobantes/${id}/portal`);
+            } catch (e) {
+                caja.innerHTML = `<div class="tenue" style="margin-top:16px;font-size:13px">
+                    Portal del receptor: ${esc(e.message)}</div>`;
+                return;
+            }
+
+            const c = datos.correo;
+            const [clase, texto] = c ? (ESTADO_CORREO[c.estado] || ["i-tenue", c.estado]) : [];
+
+            const correo = c
+                ? `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                     <span class="insignia ${clase}">${texto}</span>
+                     <span class="mono">${esc(c.para)}</span>
+                     ${c.enviadoEn ? `<span class="tenue">${fechaHora(c.enviadoEn)}</span>` : ""}
+                     ${c.estado === "ENVIADO"
+                        ? `<span class="tenue">${c.pdfAdjunto ? "con PDF adjunto" : "solo enlace (PDF de más de 1 MB)"}</span>`
+                        : ""}
+                   </div>
+                   ${c.ultimoError ? `<div class="tenue" style="font-size:12.5px;margin-top:6px">
+                       ${c.estado === "PENDIENTE" ? `Intento ${c.intentos}: ` : ""}${esc(c.ultimoError)}</div>` : ""}`
+                : `<div class="tenue" style="font-size:13px">Sin correo de entrega: el comprobante
+                     no traía correo del cliente, o la empresa no tenía dirección del portal y
+                     correo de respuesta cuando SUNAT lo aceptó.</div>`;
+
+            const vigentes = datos.accesos.filter(a => a.vigente).length;
+
+            const accesos = datos.accesos.length === 0 ? "" : `
+                <table style="margin-top:12px">
+                  <tr><th>Enlace</th><th>Creado</th><th>Vale hasta</th><th>Usos</th><th>Estado del enlace</th></tr>
+                  ${datos.accesos.map(a => `<tr>
+                    <td>${a.origen === "correo" ? "del correo" : "búsqueda (30 min)"}</td>
+                    <td class="tenue" style="white-space:nowrap">${fechaHora(a.creadoEn)}</td>
+                    <td class="tenue" style="white-space:nowrap">${fechaHora(a.expiraEn)}</td>
+                    <td>${a.usos}</td>
+                    <td>${a.vigente
+                        ? `<span class="insignia i-ok">vigente</span>`
+                        : a.anuladoEn
+                            ? `<div class="revocado">
+                                 <span class="insignia i-tenue">revocado</span>
+                                 <span class="fecha">${fechaHora(a.anuladoEn)}</span>
+                                 ${a.anuladoMotivo ? `
+                                   <button type="button" class="ver-motivo" aria-expanded="false"
+                                           title="Ver el motivo" aria-label="Ver el motivo">
+                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                                          stroke="currentColor" stroke-width="2"
+                                          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                                     </svg></button>
+                                   <div class="nube-motivo" role="tooltip" hidden><span
+                                        class="titulo">Motivo</span>${esc(a.anuladoMotivo)}</div>` : ""}
+                               </div>`
+                            : `<span class="insignia i-tenue">caducado</span>`}</td>
+                  </tr>`).join("")}
+                </table>`;
+
+            const boton = vigentes > 0 && puede("comprobantes.reprocesar")
+                ? `<button class="mini" id="btn-anular-enlaces" data-vigentes="${vigentes}"
+                           style="margin-top:12px;color:var(--mal)">
+                     Revocar ${vigentes === 1 ? "el enlace vigente" : `los ${vigentes} enlaces vigentes`}</button>`
+                : "";
+
+            caja.innerHTML = `
+                <div style="border-top:1px solid var(--borde);margin-top:18px;padding-top:14px">
+                  <div style="font-size:12.5px;color:var(--tenue);text-transform:uppercase;
+                              letter-spacing:.05em;margin-bottom:10px">Portal del receptor</div>
+                  ${correo}
+                  ${accesos}
+                  ${boton}
+                </div>`;
+
+            const b = elem("btn-anular-enlaces");
+            if (b) b.onclick = () => anularEnlaces(id, b);
+
+            caja.querySelectorAll("button.ver-motivo").forEach(boton =>
+                boton.onclick = ev => {
+                    ev.stopPropagation();
+                    const abierta = boton.getAttribute("aria-expanded") === "true";
+                    cerrarNubesMotivo();
+                    if (!abierta) {
+                        boton.setAttribute("aria-expanded", "true");
+                        boton.nextElementSibling.hidden = false;
+                    }
+                });
+        }
+
+        /// Cierra la nube del motivo que esté abierta. Se llama al abrir otra,
+        /// al pulsar fuera de ella y con Escape.
+        function cerrarNubesMotivo() {
+            document.querySelectorAll("button.ver-motivo[aria-expanded='true']").forEach(b => {
+                b.setAttribute("aria-expanded", "false");
+                b.nextElementSibling.hidden = true;
+            });
+        }
+
+        document.addEventListener("click", ev => {
+            if (!ev.target.closest(".nube-motivo")) cerrarNubesMotivo();
+        });
+        document.addEventListener("keydown", ev => {
+            if (ev.key === "Escape") cerrarNubesMotivo();
+        });
+
+        /// Pide el motivo en una ventana del panel, no con prompt() del
+        /// navegador: el de Brave o Chrome dice "localhost:5100 dice" y no
+        /// se puede validar ni dar estilo.
+        function pedirMotivo(numero, vigentes) {
+            return new Promise(resolver => {
+                const campo = elem("an-motivo");
+                const error = elem("an-error");
+
+                elem("an-sub").textContent = vigentes === 1
+                    ? `${numero} · 1 enlace vigente`
+                    : `${numero} · ${vigentes} enlaces vigentes`;
+
+                campo.value = "";
+                error.textContent = "";
+                elem("velo-anular").classList.add("visible");
+                campo.focus();
+
+                elem("an-sugerencias").querySelectorAll("button").forEach(b =>
+                    b.onclick = () => { campo.value = b.textContent; error.textContent = ""; campo.focus(); });
+
+                const cerrar = valor => {
+                    elem("velo-anular").classList.remove("visible");
+                    document.removeEventListener("keydown", teclas);
+                    resolver(valor);
+                };
+
+                const aceptar = () => {
+                    const motivo = campo.value.trim();
+
+                    if (motivo.length < 3) {
+                        error.textContent = "Escribe el motivo: es lo que se lee después cuando alguien pregunta por qué dejó de abrir.";
+                        campo.focus();
+                        return;
+                    }
+
+                    cerrar(motivo);
+                };
+
+                const teclas = ev => {
+                    if (ev.key === "Escape") cerrar(null);
+                    if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) aceptar();
+                };
+
+                document.addEventListener("keydown", teclas);
+                elem("an-cancelar").onclick = () => cerrar(null);
+                elem("an-aceptar").onclick = aceptar;
+            });
+        }
+
+        async function anularEnlaces(id, boton) {
+            const numero = estado.ultima?.resultados?.find(x => x.id === id)?.numero ?? "";
+            const vigentes = parseInt(boton.dataset.vigentes || "1", 10);
+
+            const motivo = await pedirMotivo(numero, vigentes);
+            if (motivo === null) return;
+
+            boton.disabled = true;
+
+            try {
+                const r = await fetch(`/admin/comprobantes/${id}/portal/anular`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ motivo })
+                });
+
+                if (r.status === 401) { location.href = "/login.html"; return; }
+
+                const cuerpo = await r.json().catch(() => ({}));
+
+                if (!r.ok) {
+                    avisar(cuerpo.error || "No se pudo revocar", cuerpo.detalle, "mal");
+                    boton.disabled = false;
+                    return;
+                }
+
+                avisar(cuerpo.anulados === 1 ? "Enlace revocado"
+                         : cuerpo.anulados > 1 ? `${cuerpo.anulados} enlaces revocados`
+                         : "No había enlaces vigentes",
+                       "El comprobante no cambia: sigue aceptado.", "ok");
+                await cargarPortal(id);
+
+            } catch (e) {
+                avisar("Error al revocar", e.message, "mal");
+                boton.disabled = false;
             }
         }
 

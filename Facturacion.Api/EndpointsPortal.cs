@@ -1,0 +1,409 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using Facturacion.Persistencia;
+
+namespace Facturacion.Api;
+
+/// <summary>
+/// El portal del receptor: la página donde el cliente de cada emisor busca
+/// su comprobante y lo descarga.
+///
+/// Cara pública: comprobantes.reyban.pe/{empresa}. Aquí todo cuelga de
+/// /portal, y el proxy de producción añade ese prefijo (ver
+/// despliegue-pendientes.md, §3.1).
+///
+/// ES LA ÚNICA PARTE DEL SERVICIO SIN CLAVE NI SESIÓN. Por eso:
+///
+///   - La empresa sale SIEMPRE de la dirección, y con ella se abre la sesión
+///     con RLS. Lo que manda el navegador nunca elige empresa.
+///   - Un acceso solo vale para la empresa de la dirección.
+///   - Cualquier fallo responde lo mismo, para no ayudar a quien prueba.
+///   - Los intentos se cuentan en la base, no en memoria: valen con varias
+///     copias del servicio y sobreviven a un reinicio.
+/// </summary>
+public static partial class EndpointsPortal
+{
+    // Límite de intentos (diseño §2). Los dos a la vez: el del documento
+    // protege a un cliente aunque el atacante cambie de red; el de la IP
+    // frena a quien recorre clientes distintos.
+    private const int MaxFallosDocumento = 5;   // en 15 minutos
+    private const int MaxFallosIp = 30;         // en 1 hora
+
+    private static readonly TimeSpan DuracionConsulta = TimeSpan.FromMinutes(30);
+
+    private const string NoEncontrado = "No encontramos un comprobante con esos datos.";
+
+    private const string CabeceraAcceso = "X-Portal-Acceso";
+
+    // RUC, DNI, carné de extranjería y pasaporte. Sin "0" ni "-": una boleta a
+    // consumidor final sin documento no tiene nada que solo su dueño sepa, y
+    // solo se abre con el enlace del correo.
+    private static readonly HashSet<string> TiposDocumento = new() { "6", "1", "4", "7" };
+
+    private static readonly Dictionary<string, string> NombresTipo = new()
+    {
+        ["01"] = "Factura electrónica",
+        ["03"] = "Boleta de venta electrónica",
+        ["07"] = "Nota de crédito electrónica",
+        ["08"] = "Nota de débito electrónica"
+    };
+
+    [GeneratedRegex("^[A-Za-z0-9_-]{43}$")]
+    private static partial Regex FormaAcceso();
+
+    [GeneratedRegex("^[A-Z0-9]{4}$")]
+    private static partial Regex FormaSerie();
+
+    public static void MapearPortal(this WebApplication app)
+    {
+        var grupo = app.MapGroup("/portal")
+            .AddEndpointFilter(CabecerasPortal)
+            .WithTags("Portal del receptor");
+
+        // La página. La misma para la búsqueda y para el enlace del correo:
+        // el JavaScript lee la dirección y sabe qué hacer.
+        grupo.MapGet("/{empresa}", Pagina).ExcludeFromDescription();
+        grupo.MapGet("/{empresa}/e/{enlace}", Pagina).ExcludeFromDescription();
+
+        grupo.MapGet("/api/{empresa}", MarcaEmpresa)
+            .WithSummary("La marca de la empresa: nombre, RUC, color y si tiene logo");
+
+        grupo.MapGet("/api/{empresa}/logo", Logo)
+            .WithSummary("El logo de la empresa");
+
+        grupo.MapPost("/api/{empresa}/buscar", Buscar)
+            .WithSummary("Opción A: busca un comprobante con cinco datos")
+            .WithDescription(
+                "Tipo y número de documento del cliente, serie, número, fecha de " +
+                "emisión e importe total. Si cuadran, devuelve el comprobante y un " +
+                "acceso de 30 minutos para descargarlo. Cualquier fallo responde " +
+                "lo mismo. 5 fallos en 15 min por documento o 30 en 1 hora por IP " +
+                "bloquean un rato.");
+
+        grupo.MapGet("/api/{empresa}/comprobante", Resumen)
+            .WithSummary("El comprobante de un acceso (cabecera X-Portal-Acceso)");
+
+        grupo.MapGet("/api/{empresa}/comprobante/{archivo}", Descargar)
+            .WithSummary("Descarga xml, cdr o pdf con un acceso (cabecera X-Portal-Acceso)");
+    }
+
+    // ------------------------------------------------------------- cabeceras
+
+    /// <summary>
+    /// Las cabeceras de todo lo que sale del portal.
+    ///
+    /// no-store: ni el navegador ni un proxy guardan un comprobante ajeno.
+    /// no-referrer: el enlace del correo va en la dirección y no puede salir
+    /// hacia otra web en la cabecera Referer. noindex: un buscador no tiene
+    /// nada que hacer aquí. La CSP no deja cargar nada de fuera.
+    /// </summary>
+    private static async ValueTask<object?> CabecerasPortal(
+        EndpointFilterInvocationContext contexto, EndpointFilterDelegate siguiente)
+    {
+        var h = contexto.HttpContext.Response.Headers;
+
+        h.CacheControl = "no-store";
+        h["Referrer-Policy"] = "no-referrer";
+        h["X-Robots-Tag"] = "noindex, nofollow";
+        h["X-Content-Type-Options"] = "nosniff";
+        h["X-Frame-Options"] = "DENY";
+        h["Content-Security-Policy"] =
+            "default-src 'none'; script-src 'self' 'unsafe-inline'; " +
+            "style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; " +
+            "connect-src 'self'; base-uri 'none'; form-action 'none'; " +
+            "frame-ancestors 'none'";
+
+        return await siguiente(contexto);
+    }
+
+    // ------------------------------------------------------------- endpoints
+
+    private static IResult Pagina(IWebHostEnvironment entorno)
+    {
+        var ruta = Path.Combine(entorno.WebRootPath ?? "", "portal.html");
+
+        return File.Exists(ruta)
+            ? Results.File(ruta, "text/html; charset=utf-8")
+            : Results.NotFound();
+    }
+
+    private static async Task<IResult> MarcaEmpresa(
+        string empresa, RepositorioPortal portal, CancellationToken ct)
+    {
+        var e = await portal.EmpresaAsync(empresa, ct);
+
+        if (e is null)
+            return Results.NotFound(new RespuestaError("No existe esta página."));
+
+        return Results.Ok(new
+        {
+            razonSocial = e.RazonSocial,
+            nombreComercial = string.IsNullOrWhiteSpace(e.NombreComercial) ? null : e.NombreComercial,
+            ruc = e.Ruc,
+            color = e.ColorMarca,
+            tieneLogo = e.LogoRuta is not null
+        });
+    }
+
+    private static async Task<IResult> Logo(
+        string empresa, RepositorioPortal portal, IAlmacenArchivos archivos,
+        CancellationToken ct)
+    {
+        var e = await portal.EmpresaAsync(empresa, ct);
+
+        if (e?.LogoRuta is not { } ruta)
+            return Results.NotFound();
+
+        var datos = await archivos.LeerAsync(ruta, ct);
+
+        return datos is not null && Marca.TipoDeImagen(datos) is { } tipo
+            ? Results.File(datos, tipo.TipoMime)
+            : Results.NotFound();
+    }
+
+    private static async Task<IResult> Buscar(
+        string empresa, PeticionBusquedaPortal peticion, HttpContext http,
+        RepositorioPortal portal, CancellationToken ct)
+    {
+        var e = await portal.EmpresaAsync(empresa, ct);
+
+        if (e is null)
+            return Results.NotFound(new RespuestaError("No existe esta página."));
+
+        // Un dato con forma imposible no es un intento: es un error al
+        // escribir. Se dice cuál, y no cuenta para el límite.
+        if (Limpiar(peticion) is not { } busqueda)
+            return Results.BadRequest(new RespuestaError(
+                "Revisa los datos.", ProblemaDeForma(peticion)));
+
+        var documento = Sha256($"{e.Id}|{busqueda.TipoDocumento}|{busqueda.NumeroDocumento}");
+        var ip = http.Connection.RemoteIpAddress?.ToString() ?? "desconocida";
+
+        var fallos = await portal.FallosRecientesAsync(e.Id, documento, ip, ct);
+
+        // Bloqueado: la misma respuesta de siempre más el aviso, sin decir
+        // cuánto falta. Y no se registra: el bloqueo dura lo que tarda en
+        // envejecer el fallo más antiguo, no se alarga con cada intento.
+        if (fallos.PorDocumento >= MaxFallosDocumento || fallos.PorIp >= MaxFallosIp)
+            return Results.Json(
+                new RespuestaError(NoEncontrado, "Demasiados intentos. Prueba dentro de un rato."),
+                statusCode: StatusCodes.Status429TooManyRequests);
+
+        var comprobante = await portal.BuscarAsync(e.Id, busqueda, ct);
+
+        await portal.RegistrarIntentoAsync(e.Id, documento, ip, comprobante is not null, ct);
+
+        if (comprobante is null)
+            return Results.NotFound(new RespuestaError(NoEncontrado,
+                "Revisa que los datos sean exactamente los del comprobante. " +
+                "La fecha es la de emisión y el importe, el total con IGV."));
+
+        var acceso = AccesoPortal.Nuevo();
+
+        await portal.CrearAccesoAsync(
+            e.Id, comprobante.Id, AccesoPortal.Hash(acceso), "consulta", DuracionConsulta, ct);
+
+        return Results.Ok(new { acceso, comprobante = Resumir(comprobante) });
+    }
+
+    private static async Task<IResult> Resumen(
+        string empresa, HttpContext http, RepositorioPortal portal, CancellationToken ct)
+    {
+        var (_, comprobante) = await ResolverAsync(empresa, http, portal, ct);
+
+        return comprobante is null
+            ? AccesoNoValido()
+            : Results.Ok(new { comprobante = Resumir(comprobante) });
+    }
+
+    private static async Task<IResult> Descargar(
+        string empresa, string archivo, HttpContext http,
+        RepositorioPortal portal, RepositorioComprobantes comprobantes,
+        IAlmacenArchivos archivos, CancellationToken ct)
+    {
+        var (e, c) = await ResolverAsync(empresa, http, portal, ct);
+
+        if (e is null || c is null)
+            return AccesoNoValido();
+
+        if (archivo == "pdf")
+        {
+            var datos = await comprobantes.ObtenerParaPdfAsync(e.Id, c.Id, ct);
+
+            return datos is null
+                ? AccesoNoValido()
+                : await PdfDeComprobante.ResponderAsync(datos, archivos, ct);
+        }
+
+        if (archivo is not ("xml" or "cdr"))
+            return Results.NotFound();
+
+        // Una boleta no tiene CDR propio (va en el resumen diario), y el
+        // portal solo ofrece su PDF: la misma regla que la plataforma.
+        if (EsBoleta(c))
+            return Results.NotFound(new RespuestaError(
+                "De una boleta solo se descarga el PDF."));
+
+        var rutas = await comprobantes.ObtenerRutasAsync(e.Id, c.Id, ct);
+        var ruta = archivo == "xml" ? rutas?.RutaXml : rutas?.RutaCdr;
+
+        if (rutas is null || string.IsNullOrWhiteSpace(ruta))
+            return Results.NotFound(new RespuestaError("Ese archivo no está disponible."));
+
+        var contenido = await archivos.LeerAsync(ruta, ct);
+
+        if (contenido is null)
+            return Results.NotFound(new RespuestaError("Ese archivo no está disponible."));
+
+        return archivo == "xml"
+            ? Results.File(contenido, "application/xml", rutas.NombreDescarga("xml"))
+            : Results.File(contenido, "application/zip", $"R-{rutas.NombreDescarga("zip")}");
+    }
+
+    // -------------------------------------------------------------- piezas
+
+    /// <summary>
+    /// La empresa de la dirección y el comprobante del acceso, o nulls.
+    /// El acceso llega en una cabecera y no en la dirección: así no queda
+    /// escrito en los registros del proxy ni en el historial.
+    /// </summary>
+    private static async Task<(EmpresaPortal? Empresa, ComprobantePortal? Comprobante)> ResolverAsync(
+        string empresa, HttpContext http, RepositorioPortal portal, CancellationToken ct)
+    {
+        var acceso = http.Request.Headers[CabeceraAcceso].ToString();
+
+        if (!FormaAcceso().IsMatch(acceso))
+            return (null, null);
+
+        var e = await portal.EmpresaAsync(empresa, ct);
+        if (e is null) return (null, null);
+
+        var comprobanteId = await portal.ResolverAccesoAsync(e.Id, AccesoPortal.Hash(acceso), ct);
+        if (comprobanteId is not { } id) return (e, null);
+
+        return (e, await portal.ObtenerAsync(e.Id, id, ct));
+    }
+
+    private static IResult AccesoNoValido() =>
+        // "ANULADO" NO: al cliente le suena a que anularon SU FACTURA, y la
+        // factura no cambia cuando se revoca o caduca un enlace.
+        Results.NotFound(new RespuestaError(
+            "Este enlace ya no está disponible.",
+            "Puede haber caducado o haberse desactivado. Tu comprobante sigue " +
+            "siendo válido: búscalo con tus datos."));
+
+    private static bool EsBoleta(ComprobantePortal c) => c.TipoComprobante == "03";
+
+    private static object Resumir(ComprobantePortal c) => new
+    {
+        tipo = c.TipoComprobante,
+        tipoNombre = NombresTipo.GetValueOrDefault(c.TipoComprobante, c.TipoComprobante),
+        numero = c.Numero,
+        fechaEmision = c.FechaEmision.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+        moneda = c.Moneda,
+        importeTotal = c.ImporteTotal,
+        receptor = c.ReceptorNombre,
+        anulado = c.Estado == "ANULADO",
+        estado = c.Estado switch
+        {
+            "ACEPTADO" => "Aceptado por SUNAT",
+            "ACEPTADO_CON_OBSERVACIONES" => "Aceptado por SUNAT con observaciones",
+            "ANULADO" => "Anulado: dado de baja ante SUNAT",
+            _ => c.Estado
+        },
+        archivos = new
+        {
+            pdf = true,
+            xml = !EsBoleta(c) && c.TieneXml,
+            cdr = !EsBoleta(c) && c.TieneCdr
+        }
+    };
+
+    private static string Sha256(string texto) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(texto))).ToLowerInvariant();
+
+    /// <summary>Los cinco datos limpios, o null si alguno no tiene forma posible.</summary>
+    private static BusquedaPortal? Limpiar(PeticionBusquedaPortal p)
+    {
+        var tipo = (p.TipoDocumento ?? "").Trim();
+        var documento = (p.NumeroDocumento ?? "").Trim().ToUpperInvariant();
+        var serie = (p.Serie ?? "").Trim().ToUpperInvariant();
+        var numero = (p.Numero ?? "").Trim();
+        var importe = (p.ImporteTotal ?? "").Trim().Replace(" ", "").Replace(",", ".");
+
+        if (!TiposDocumento.Contains(tipo)) return null;
+        if (documento.Length is < 6 or > 15 || !documento.All(char.IsLetterOrDigit)) return null;
+        if (!FormaSerie().IsMatch(serie)) return null;
+        if (!int.TryParse(numero, NumberStyles.None, CultureInfo.InvariantCulture, out var correlativo)
+            || correlativo <= 0) return null;
+
+        if (!DateTime.TryParseExact((p.FechaEmision ?? "").Trim(), "yyyy-MM-dd",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out var fecha)) return null;
+
+        if (!decimal.TryParse(importe, NumberStyles.AllowDecimalPoint,
+                CultureInfo.InvariantCulture, out var total) || total < 0) return null;
+
+        return new BusquedaPortal(
+            tipo, documento, serie, correlativo,
+            DateTime.SpecifyKind(fecha.Date, DateTimeKind.Unspecified),
+            Math.Round(total, 2));
+    }
+
+    private static string ProblemaDeForma(PeticionBusquedaPortal p)
+    {
+        if (!TiposDocumento.Contains((p.TipoDocumento ?? "").Trim()))
+            return "Elige el tipo de documento. Si tu comprobante no tiene documento " +
+                   "(boleta sin DNI), ábrelo con el enlace del correo.";
+
+        var documento = (p.NumeroDocumento ?? "").Trim();
+        if (documento.Length is < 6 or > 15 || !documento.All(char.IsLetterOrDigit))
+            return "El número de documento solo lleva letras y números.";
+
+        if (!FormaSerie().IsMatch((p.Serie ?? "").Trim().ToUpperInvariant()))
+            return "La serie tiene 4 caracteres, por ejemplo F001 o B001.";
+
+        if (!int.TryParse((p.Numero ?? "").Trim(), NumberStyles.None,
+                CultureInfo.InvariantCulture, out var n) || n <= 0)
+            return "El número del comprobante solo lleva dígitos, por ejemplo 96.";
+
+        if (!DateTime.TryParseExact((p.FechaEmision ?? "").Trim(), "yyyy-MM-dd",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+            return "Falta la fecha de emisión.";
+
+        return "El importe total va con punto o coma decimal, por ejemplo 100.01.";
+    }
+}
+
+/// <summary>
+/// Lo que manda la página. Todo como texto: se limpia aquí, y un dato mal
+/// escrito devuelve un mensaje en vez de un error de formato de JSON.
+/// </summary>
+public record PeticionBusquedaPortal(
+    string? TipoDocumento,
+    string? NumeroDocumento,
+    string? Serie,
+    string? Numero,
+    string? FechaEmision,
+    string? ImporteTotal);
+
+/// <summary>
+/// Cómo nace un acceso del portal y cómo se guarda.
+///
+/// EN UN SOLO SITIO A PROPÓSITO: la búsqueda (opción A) y el correo
+/// (opción B) crean accesos, y la página los resuelve. Si dos sitios
+/// calcularan el hash de forma distinta, los enlaces de los correos dejarían
+/// de abrir sin que nada fallara al enviarlos.
+/// </summary>
+public static class AccesoPortal
+{
+    /// <summary>32 bytes aleatorios en base64url: 43 caracteres.</summary>
+    public static string Nuevo() =>
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    /// <summary>Lo que se guarda en la base: su SHA-256 en hexadecimal.</summary>
+    public static string Hash(string acceso) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(acceso))).ToLowerInvariant();
+}

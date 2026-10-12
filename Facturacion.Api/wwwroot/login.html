@@ -190,62 +190,7 @@ async function ingresar() {
   // no se ve y cancela el envío con un error que no explica nada.
   if (!elem("correo").value.trim()) {
     mostrar("Escribe tu correo.");
-    
-// ------------------------------------------------------------------- ojitos
-//
-// Escribir una contraseña a ciegas es la causa más común de "mi contraseña no
-// funciona": se escribió mal y no hay forma de verlo. Poder mostrarla reduce
-// los intentos fallidos, que además bloquean la cuenta tras cinco.
-//
-// El botón dice qué hace mediante aria-label, para quien use lector de
-// pantalla, y cambia de icono según el estado.
-
-const OJO_ABIERTO = `<svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>`;
-
-const OJO_CERRADO = `<svg viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.2A9.8 9.8 0 0112 5c6.5 0 10 7 10 7a17 17 0 01-3.2 4"/><path d="M6.2 6.2A17 17 0 002 12s3.5 7 10 7c1.6 0 3-.4 4.2-1"/><path d="M9.9 9.9a3 3 0 004.2 4.2"/></svg>`;
-
-function ponerOjo(idCampo) {
-  const campo = elem(idCampo);
-  if (!campo || campo.dataset.conOjo) return;
-
-  campo.dataset.conOjo = "1";
-
-  const envoltura = document.createElement("span");
-  envoltura.className = "con-ojo";
-
-  campo.parentNode.insertBefore(envoltura, campo);
-  envoltura.appendChild(campo);
-
-  const boton = document.createElement("button");
-  boton.type = "button";
-  boton.innerHTML = OJO_ABIERTO;
-  boton.setAttribute("aria-label", "Mostrar contraseña");
-  boton.title = "Mostrar contraseña";
-
-  boton.onclick = () => {
-    const visible = campo.type === "text";
-
-    campo.type = visible ? "password" : "text";
-    boton.innerHTML = visible ? OJO_ABIERTO : OJO_CERRADO;
-
-    const texto = visible ? "Mostrar contraseña" : "Ocultar contraseña";
-    boton.setAttribute("aria-label", texto);
-    boton.title = texto;
-
-    // Devolver el foco al campo: si no, seguir escribiendo obliga a hacer
-    // clic otra vez.
-    campo.focus();
-  };
-
-  envoltura.appendChild(boton);
-}
-
-// Se aplica a todos los campos de contraseña de la página.
-document.querySelectorAll('input[type=password]').forEach(c => {
-  if (c.id) ponerOjo(c.id);
-});
-
-elem("correo").focus();
+    elem("correo").focus();
     return;
   }
 
@@ -580,6 +525,60 @@ async function pedirRecuperacion() {
     mostrar("No se pudo contactar el servicio: " + e.message);
   }
 }
+
+// ------------------------------------------------------------------- ojitos
+//
+// Escribir una contraseña a ciegas es la causa más común de "mi contraseña no
+// funciona": se escribió mal y no hay forma de verlo. Poder mostrarla reduce
+// los intentos fallidos, que además bloquean la cuenta tras cinco.
+//
+// El botón dice qué hace mediante aria-label, para quien use lector de
+// pantalla, y cambia de icono según el estado.
+
+const OJO_ABIERTO = `<svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>`;
+
+const OJO_CERRADO = `<svg viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.2A9.8 9.8 0 0112 5c6.5 0 10 7 10 7a17 17 0 01-3.2 4"/><path d="M6.2 6.2A17 17 0 002 12s3.5 7 10 7c1.6 0 3-.4 4.2-1"/><path d="M9.9 9.9a3 3 0 004.2 4.2"/></svg>`;
+
+function ponerOjo(idCampo) {
+  const campo = elem(idCampo);
+  if (!campo || campo.dataset.conOjo) return;
+
+  campo.dataset.conOjo = "1";
+
+  const envoltura = document.createElement("span");
+  envoltura.className = "con-ojo";
+
+  campo.parentNode.insertBefore(envoltura, campo);
+  envoltura.appendChild(campo);
+
+  const boton = document.createElement("button");
+  boton.type = "button";
+  boton.innerHTML = OJO_ABIERTO;
+  boton.setAttribute("aria-label", "Mostrar contraseña");
+  boton.title = "Mostrar contraseña";
+
+  boton.onclick = () => {
+    const visible = campo.type === "text";
+
+    campo.type = visible ? "password" : "text";
+    boton.innerHTML = visible ? OJO_ABIERTO : OJO_CERRADO;
+
+    const texto = visible ? "Mostrar contraseña" : "Ocultar contraseña";
+    boton.setAttribute("aria-label", texto);
+    boton.title = texto;
+
+    // Devolver el foco al campo: si no, seguir escribiendo obliga a hacer
+    // clic otra vez.
+    campo.focus();
+  };
+
+  envoltura.appendChild(boton);
+}
+
+// Se aplica a todos los campos de contraseña de la página.
+document.querySelectorAll('input[type=password]').forEach(c => {
+  if (c.id) ponerOjo(c.id);
+});
 
 elem("correo").focus();
 </script>

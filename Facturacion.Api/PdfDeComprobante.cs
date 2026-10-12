@@ -160,6 +160,27 @@ public static class PdfDeComprobante
     }
 
     /// <summary>
+    /// El logo de la empresa, o null si no tiene o no se puede leer.
+    ///
+    /// Que el almacén falle al leer el logo tampoco impide el PDF: se
+    /// entrega sin él.
+    /// </summary>
+    private static async Task<byte[]?> LeerLogoAsync(
+        string? ruta, IAlmacenArchivos archivos, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(ruta)) return null;
+
+        try
+        {
+            return await archivos.LeerAsync(ruta, ct);
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Todo el camino de una vez: comprobar el estado, reconstruir, leer el
     /// resumen de la firma y generar.
     ///
@@ -197,6 +218,22 @@ public static class PdfDeComprobante
                 title: "Comprobante ilegible");
         }
 
+        var pdf = await GenerarBytesAsync(comprobante, datos, archivos, ct);
+
+        return Results.File(pdf, "application/pdf", $"{datos.Numero}.pdf");
+    }
+
+    /// <summary>
+    /// El PDF de un comprobante ya reconstruido, en bytes.
+    ///
+    /// Es lo mismo que sirve ResponderAsync, separado para que el correo de
+    /// entrega adjunte EXACTAMENTE el mismo PDF que se descarga del panel y
+    /// del portal. Dos caminos para hacer el PDF acabarían dando dos PDF.
+    /// </summary>
+    public static async Task<byte[]> GenerarBytesAsync(
+        ComprobanteBase comprobante, DatosParaPdf datos,
+        IAlmacenArchivos archivos, CancellationToken ct)
+    {
         // EL RESUMEN DE LA FIRMA SE LEE DEL XML, no se recalcula.
         //
         // El QR debe declarar exactamente lo que se firmó. Calcularlo por
@@ -225,13 +262,31 @@ public static class PdfDeComprobante
             }
         }
 
+        var logo = await LeerLogoAsync(datos.LogoRuta, archivos, ct);
+
         var opciones = new OpcionesImpresion(
             EstadoSunat: TextoEstado(datos.Estado),
             MensajeSunat: datos.MensajeSunat,
+            Logo: logo,
             Extra: LeerExtra(datos.ExtraJson));
 
-        var pdf = Generar(comprobante, digest, opciones);
+        byte[] pdf;
 
-        return Results.File(pdf, "application/pdf", $"{datos.Numero}.pdf");
+        try
+        {
+            pdf = Generar(comprobante, digest, opciones);
+        }
+        catch (Exception) when (logo is not null)
+        {
+            // UN LOGO QUE NO SE PUEDE DIBUJAR NO DEJA SIN COMPROBANTE A NADIE.
+            //
+            // Al subirlo se prueba a dibujarlo (Marca.ProblemaAlDibujar), así
+            // que esto no debería pasar. Si pasa, el PDF sale sin logo: es el
+            // mismo criterio que con `extra`. Un adorno no vale una factura
+            // que no se puede entregar.
+            pdf = Generar(comprobante, digest, opciones with { Logo = null });
+        }
+
+        return pdf;
     }
 }

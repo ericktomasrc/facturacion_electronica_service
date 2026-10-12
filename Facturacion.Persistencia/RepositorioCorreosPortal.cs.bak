@@ -1,0 +1,301 @@
+using Dapper;
+using Npgsql;
+
+namespace Facturacion.Persistencia;
+
+/// <summary>Un correo de entrega que toca enviar.</summary>
+public record CorreoPendiente(
+    Guid Id,
+    Guid TenantId,
+    Guid ComprobanteId,
+    string Para,
+    short Intentos);
+
+/// <summary>Todo lo que hace falta para armar el correo de un comprobante.</summary>
+public record DatosCorreoPortal(
+    bool EmpresaActiva,
+    string Ruc,
+    string RazonSocial,
+    string? NombreComercial,
+    string? Identificador,
+    string? ColorMarca,
+    string? LogoRuta,
+    string? CorreoRespuesta,
+    string TipoComprobante,
+    string Serie,
+    int Correlativo,
+    DateTime FechaEmision,
+    string Moneda,
+    decimal ImporteTotal,
+    string Estado)
+{
+    public string Numero => $"{Serie}-{Correlativo:D8}";
+
+    public string NombreEmisor =>
+        string.IsNullOrWhiteSpace(NombreComercial) ? RazonSocial : NombreComercial!;
+}
+
+/// <summary>Lo que el panel enseña del portal para un comprobante.</summary>
+public record CorreoPortalAdmin(
+    string Para,
+    string Estado,
+    short Intentos,
+    string? UltimoError,
+    DateTime? EnviadoEn,
+    bool? PdfAdjunto,
+    DateTime CreadoEn);
+
+public record AccesoPortalAdmin(
+    Guid Id,
+    string Origen,
+    DateTime CreadoEn,
+    DateTime ExpiraEn,
+    DateTime? AnuladoEn,
+    string? AnuladoMotivo,
+    int Usos,
+    DateTime? UltimoUsoEn);
+
+/// <summary>
+/// La cola del correo de entrega y la administración de los accesos.
+///
+/// USA EL ROL DE OPERADOR: quien envía recorre la cola de todas las empresas,
+/// y anular accesos es cosa del panel. La aplicación no puede anular.
+/// </summary>
+public sealed class RepositorioCorreosPortal
+{
+    private readonly string _cadenaOperador;
+
+    public RepositorioCorreosPortal(string cadenaConexionOperador)
+    {
+        _cadenaOperador = cadenaConexionOperador
+            ?? throw new ArgumentNullException(nameof(cadenaConexionOperador));
+    }
+
+    private async Task<NpgsqlConnection> AbrirAsync(CancellationToken ct)
+    {
+        var conexion = new NpgsqlConnection(_cadenaOperador);
+        await conexion.OpenAsync(ct);
+        return conexion;
+    }
+
+    // ------------------------------------------------------------------ cola
+
+    /// <summary>
+    /// Toma un lote de correos y los aparta 10 minutos.
+    ///
+    /// APARTAR ES ADELANTAR proximo_intento_en: si el proceso muere a mitad de
+    /// un envío, el correo vuelve a estar disponible solo, sin quedarse
+    /// "en curso" para siempre. SKIP LOCKED evita que dos vueltas tomen el
+    /// mismo.
+    /// </summary>
+    public async Task<IReadOnlyList<CorreoPendiente>> TomarPendientesAsync(
+        int lote, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+
+        var filas = await conexion.QueryAsync<CorreoPendiente>(new CommandDefinition(
+            """
+            UPDATE portal_correos c
+               SET proximo_intento_en = now() + interval '10 minutes',
+                   intentos = c.intentos + 1
+             WHERE c.id IN (
+                   SELECT id FROM portal_correos
+                    WHERE estado = 'PENDIENTE'
+                      AND (proximo_intento_en IS NULL OR proximo_intento_en <= now())
+                    ORDER BY proximo_intento_en NULLS FIRST, creado_en
+                    LIMIT @lote
+                      FOR UPDATE SKIP LOCKED)
+            RETURNING c.id             AS "Id",
+                      c.tenant_id      AS "TenantId",
+                      c.comprobante_id AS "ComprobanteId",
+                      c.para           AS "Para",
+                      c.intentos       AS "Intentos"
+            """,
+            new { lote }, cancellationToken: ct));
+
+        return filas.ToList();
+    }
+
+    public async Task<DatosCorreoPortal?> DatosAsync(
+        Guid tenantId, Guid comprobanteId, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+
+        return await conexion.QuerySingleOrDefaultAsync<DatosCorreoPortal>(new CommandDefinition(
+            """
+            SELECT t.activo           AS "EmpresaActiva",
+                   t.ruc              AS "Ruc",
+                   t.razon_social     AS "RazonSocial",
+                   t.nombre_comercial AS "NombreComercial",
+                   t.identificador    AS "Identificador",
+                   t.color_marca      AS "ColorMarca",
+                   t.logo_ruta        AS "LogoRuta",
+                   t.correo_respuesta AS "CorreoRespuesta",
+                   c.tipo_comprobante AS "TipoComprobante",
+                   c.serie            AS "Serie",
+                   c.correlativo      AS "Correlativo",
+                   c.fecha_emision    AS "FechaEmision",
+                   c.moneda           AS "Moneda",
+                   c.importe_total    AS "ImporteTotal",
+                   c.estado           AS "Estado"
+              FROM comprobantes c
+              JOIN tenants t ON t.id = c.tenant_id
+             WHERE c.id = @comprobanteId
+               AND c.tenant_id = @tenantId
+            """,
+            new { tenantId, comprobanteId }, cancellationToken: ct));
+    }
+
+    /// <summary>Crea el acceso del correo: 400 días, origen 'correo'.</summary>
+    public async Task<Guid> CrearAccesoCorreoAsync(
+        Guid tenantId, Guid comprobanteId, string hash, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+
+        return await conexion.ExecuteScalarAsync<Guid>(new CommandDefinition(
+            """
+            INSERT INTO portal_accesos (tenant_id, comprobante_id, hash, origen, expira_en)
+            VALUES (@tenantId, @comprobanteId, @hash, 'correo', now() + interval '400 days')
+            RETURNING id
+            """,
+            new { tenantId, comprobanteId, hash }, cancellationToken: ct));
+    }
+
+    public async Task MarcarEnviadoAsync(
+        Guid id, Guid accesoId, bool pdfAdjunto, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+
+        await conexion.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE portal_correos
+               SET estado = 'ENVIADO',
+                   enviado_en = now(),
+                   acceso_id = @accesoId,
+                   pdf_adjunto = @pdfAdjunto,
+                   ultimo_error = NULL,
+                   proximo_intento_en = NULL
+             WHERE id = @id
+            """,
+            new { id, accesoId, pdfAdjunto }, cancellationToken: ct));
+    }
+
+    /// <summary>
+    /// Un envío fallido. El acceso que se creó para ese intento se anula: su
+    /// enlace no llegó a nadie, y uno nuevo saldrá en el siguiente intento.
+    /// </summary>
+    public async Task MarcarFalloAsync(
+        Guid id, string error, TimeSpan? reintentarEn, Guid? accesoFallido,
+        CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+        await using var transaccion = await conexion.BeginTransactionAsync(ct);
+
+        await conexion.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE portal_correos
+               SET estado = CASE WHEN @agotado THEN 'AGOTADO' ELSE 'PENDIENTE' END,
+                   ultimo_error = left(@error, 1000),
+                   proximo_intento_en = CASE WHEN @agotado THEN NULL
+                                             ELSE now() + make_interval(secs => @segundos) END
+             WHERE id = @id
+            """,
+            new
+            {
+                id,
+                error,
+                agotado = reintentarEn is null,
+                segundos = reintentarEn?.TotalSeconds ?? 0
+            },
+            transaccion, cancellationToken: ct));
+
+        if (accesoFallido is { } accesoId)
+            await conexion.ExecuteAsync(new CommandDefinition(
+                """
+                UPDATE portal_accesos
+                   SET anulado_en = now(), anulado_motivo = 'El correo no se pudo enviar.'
+                 WHERE id = @accesoId AND anulado_en IS NULL
+                """,
+                new { accesoId }, transaccion, cancellationToken: ct));
+
+        await transaccion.CommitAsync(ct);
+    }
+
+    /// <summary>No se manda y no se reintenta: la empresa ya no está lista.</summary>
+    public async Task MarcarOmitidoAsync(Guid id, string motivo, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+
+        await conexion.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE portal_correos
+               SET estado = 'OMITIDO', ultimo_error = @motivo, proximo_intento_en = NULL
+             WHERE id = @id
+            """,
+            new { id, motivo }, cancellationToken: ct));
+    }
+
+    // ----------------------------------------------------------------- panel
+
+    public async Task<(CorreoPortalAdmin? Correo, IReadOnlyList<AccesoPortalAdmin> Accesos)>
+        ListarAsync(Guid comprobanteId, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+
+        var correo = await conexion.QuerySingleOrDefaultAsync<CorreoPortalAdmin>(
+            new CommandDefinition(
+                """
+                SELECT para         AS "Para",
+                       estado       AS "Estado",
+                       intentos     AS "Intentos",
+                       ultimo_error AS "UltimoError",
+                       enviado_en   AS "EnviadoEn",
+                       pdf_adjunto  AS "PdfAdjunto",
+                       creado_en    AS "CreadoEn"
+                  FROM portal_correos
+                 WHERE comprobante_id = @comprobanteId
+                """,
+                new { comprobanteId }, cancellationToken: ct));
+
+        var accesos = await conexion.QueryAsync<AccesoPortalAdmin>(new CommandDefinition(
+            """
+            SELECT id             AS "Id",
+                   origen         AS "Origen",
+                   creado_en      AS "CreadoEn",
+                   expira_en      AS "ExpiraEn",
+                   anulado_en     AS "AnuladoEn",
+                   anulado_motivo AS "AnuladoMotivo",
+                   usos           AS "Usos",
+                   ultimo_uso_en  AS "UltimoUsoEn"
+              FROM portal_accesos
+             WHERE comprobante_id = @comprobanteId
+             ORDER BY creado_en DESC
+            """,
+            new { comprobanteId }, cancellationToken: ct));
+
+        return (correo, accesos.ToList());
+    }
+
+    /// <summary>
+    /// Anula todos los accesos vigentes de un comprobante. Devuelve cuántos.
+    ///
+    /// Se anulan, no se borran: queda quién los usó, cuántas veces y cuándo
+    /// dejaron de servir, que es justo lo que hay que poder responder si el
+    /// cliente pregunta.
+    /// </summary>
+    public async Task<int> AnularAccesosAsync(
+        Guid comprobanteId, string motivo, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+
+        return await conexion.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE portal_accesos
+               SET anulado_en = now(), anulado_motivo = @motivo
+             WHERE comprobante_id = @comprobanteId
+               AND anulado_en IS NULL
+               AND expira_en > now()
+            """,
+            new { comprobanteId, motivo }, cancellationToken: ct));
+    }
+}

@@ -23,8 +23,16 @@ public record WebhookAdmin(
     bool Activo,
     DateTime CreadoEn,
     int Pendientes,
-    int Agotados)
+    int Agotados,
+    string Origen,
+    DateTime SecretoCambiadoEn)
 {
+    /// <summary>
+    /// Registrado con POST /v1/webhook por la clave de la empresa (la
+    /// plataforma), no a mano. Lo mantiene la plataforma al conectar.
+    /// </summary>
+    public bool EsDeLaApi => Origen == "api";
+
     /// <summary>Vacío significa que está suscrito a todos los eventos.</summary>
     public string[] Eventos =>
         string.IsNullOrWhiteSpace(EventosTexto)
@@ -43,6 +51,19 @@ public record EntregaPendiente(
     string Url,
     string Secreto,
     short Intentos);
+
+/// <summary>Una fila de webhook_cambios, para el panel.</summary>
+public record CambioWebhook(
+    long Id,
+    Guid WebhookId,
+    string Accion,
+    string? UrlAntes,
+    string UrlDespues,
+    string HechoDesde,
+    string? PrefijoClave,
+    DateTime CreadoEn);
+
+public enum ResultadoCambioEstado { Hecho, SinCambio, Conflicto }
 
 /// <summary>Historial de entregas, para el panel.</summary>
 public record EntregaHistorial(
@@ -118,17 +139,26 @@ public sealed class RepositorioWebhooks
 
                        (SELECT count(*)::int FROM webhook_entregas e
                          WHERE e.webhook_id = w.id AND e.estado = 'AGOTADO')
-                                   AS "Agotados"
+                                   AS "Agotados",
+
+                       w.origen              AS "Origen",
+                       w.secreto_cambiado_en AS "SecretoCambiadoEn"
 
                   FROM webhooks w
                  WHERE w.tenant_id = @tenantId
-                 ORDER BY w.creado_en DESC
+                 ORDER BY w.activo DESC, w.creado_en DESC
                 """,
                 new { tenantId }, cancellationToken: ct));
 
         return filas.ToList();
     }
 
+    /// <summary>
+    /// Registra un webhook desde el panel (origen 'panel').
+    ///
+    /// La URL ya viene revisada por DestinoWebhook. Los de la API no se crean
+    /// aquí: los mantiene POST /v1/webhook (RepositorioWebhookApi).
+    /// </summary>
     public async Task<(Guid Id, string Secreto)> CrearAsync(
         Guid tenantId, string nombre, string url, string[] eventos,
         CancellationToken ct = default)
@@ -149,29 +179,91 @@ public sealed class RepositorioWebhooks
         return (id, secreto);
     }
 
-    public async Task<bool> CambiarEstadoAsync(
+    /// <summary>
+    /// Activa o desactiva un webhook desde el panel, y lo anota en
+    /// webhook_cambios. Quién lo hizo queda en la bitácora del panel.
+    ///
+    /// Devuelve null si no existe, o el resultado. Activar un webhook de la
+    /// API cuando la empresa ya tiene otro de la API activo choca con
+    /// ux_webhooks_api_por_tenant: se responde Conflicto en vez de dejar dos
+    /// (cada factura se avisaría dos veces).
+    /// </summary>
+    public async Task<ResultadoCambioEstado?> CambiarEstadoAsync(
         Guid tenantId, Guid webhookId, bool activo, CancellationToken ct = default)
     {
         await using var conexion = await AbrirAsync(ct);
+        await using var transaccion = await conexion.BeginTransactionAsync(ct);
 
-        var filas = await conexion.ExecuteAsync(new CommandDefinition(
-            "UPDATE webhooks SET activo = @activo WHERE id = @webhookId AND tenant_id = @tenantId",
-            new { tenantId, webhookId, activo }, cancellationToken: ct));
+        var actual = await conexion.QuerySingleOrDefaultAsync<UrlYEstado>(
+            new CommandDefinition(
+                """
+                SELECT url AS "Url", activo AS "Activo" FROM webhooks
+                 WHERE id = @webhookId AND tenant_id = @tenantId
+                 FOR UPDATE
+                """,
+                new { tenantId, webhookId }, transaccion, cancellationToken: ct));
 
-        return filas > 0;
+        if (actual is null) return null;
+
+        if (actual.Activo == activo) return ResultadoCambioEstado.SinCambio;
+
+        try
+        {
+            await conexion.ExecuteAsync(new CommandDefinition(
+                "UPDATE webhooks SET activo = @activo WHERE id = @webhookId AND tenant_id = @tenantId",
+                new { tenantId, webhookId, activo }, transaccion, cancellationToken: ct));
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            return ResultadoCambioEstado.Conflicto;
+        }
+
+        await conexion.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO webhook_cambios
+                   (webhook_id, tenant_id, accion, url_antes, url_despues, hecho_desde)
+            VALUES (@webhookId, @tenantId, @accion, @url, @url, 'panel')
+            """,
+            new
+            {
+                webhookId, tenantId,
+                accion = activo ? "activado" : "desactivado",
+                url = actual.Url
+            },
+            transaccion, cancellationToken: ct));
+
+        await transaccion.CommitAsync(ct);
+
+        return ResultadoCambioEstado.Hecho;
     }
 
-    public async Task<bool> EliminarAsync(
-        Guid tenantId, Guid webhookId, CancellationToken ct = default)
+    private sealed record UrlYEstado(string Url, bool Activo);
+
+    /// <summary>Quién cambió qué en los webhooks de una empresa. Nunca el secreto.</summary>
+    public async Task<IReadOnlyList<CambioWebhook>> CambiosAsync(
+        Guid tenantId, int limite = 50, CancellationToken ct = default)
     {
         await using var conexion = await AbrirAsync(ct);
 
-        // Las entregas se borran en cascada: sin webhook no tienen a dónde ir.
-        var filas = await conexion.ExecuteAsync(new CommandDefinition(
-            "DELETE FROM webhooks WHERE id = @webhookId AND tenant_id = @tenantId",
-            new { tenantId, webhookId }, cancellationToken: ct));
+        var filas = await conexion.QueryAsync<CambioWebhook>(
+            new CommandDefinition(
+                """
+                SELECT id          AS "Id",
+                       webhook_id  AS "WebhookId",
+                       accion      AS "Accion",
+                       url_antes   AS "UrlAntes",
+                       url_despues AS "UrlDespues",
+                       hecho_desde AS "HechoDesde",
+                       prefijo_clave AS "PrefijoClave",
+                       creado_en   AS "CreadoEn"
+                  FROM webhook_cambios
+                 WHERE tenant_id = @tenantId
+                 ORDER BY creado_en DESC, id DESC
+                 LIMIT @limite
+                """,
+                new { tenantId, limite }, cancellationToken: ct));
 
-        return filas > 0;
+        return filas.ToList();
     }
 
     public async Task<IReadOnlyList<EntregaHistorial>> HistorialAsync(

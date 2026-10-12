@@ -420,6 +420,52 @@ public class ReceptorDto
     public string RazonSocial { get; set; } = "";
 
     public string Direccion { get; set; } = "";
+
+    /// <summary>
+    /// Opcional. A dónde se le manda el comprobante cuando SUNAT lo acepte, con
+    /// el PDF y el enlace al portal del receptor.
+    ///
+    /// NO ES UN DATO TRIBUTARIO Y NUNCA VA AL XML. Se guarda en su propia
+    /// columna (`comprobantes.correo_receptor`), no en el `cpe`, que es lo que
+    /// se firma.
+    ///
+    /// Se usa en facturas, boletas y notas. En las guías (`Destinatario`) hoy
+    /// no se usa: el portal es para comprobantes de pago.
+    ///
+    /// La comprobación es floja a propósito —una arroba, un punto en el
+    /// dominio, sin espacios—: lo único que demuestra que un correo existe es
+    /// mandarle algo.
+    /// </summary>
+    public string? Correo { get; set; }
+
+    /// <summary>El correo sin espacios alrededor, o null si no vino.</summary>
+    public string? CorreoLimpio() =>
+        string.IsNullOrWhiteSpace(Correo) ? null : Correo.Trim();
+
+    /// <summary>
+    /// Null si el correo está bien o no vino; si no, el motivo, para devolver
+    /// un 400 que diga qué pasa.
+    /// </summary>
+    public string? ProblemaCorreo()
+    {
+        if (CorreoLimpio() is not { } correo) return null;
+
+        if (correo.Length > 254)
+            return "El correo del receptor es demasiado largo (máximo 254 caracteres).";
+
+        var arroba = correo.IndexOf('@');
+        var dominio = arroba > 0 ? correo[(arroba + 1)..] : "";
+
+        var tieneForma =
+            arroba > 0 &&
+            arroba == correo.LastIndexOf('@') &&
+            dominio.Contains('.') &&
+            !dominio.StartsWith('.') &&
+            !dominio.EndsWith('.') &&
+            !correo.Any(char.IsWhiteSpace);
+
+        return tieneForma ? null : $"El correo del receptor no tiene forma de correo: «{correo}».";
+    }
 }
 
 public class LineaDto

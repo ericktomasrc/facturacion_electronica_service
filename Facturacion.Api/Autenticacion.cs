@@ -14,11 +14,27 @@ public sealed class ContextoEmisor
 
     public bool Autenticado => Tenant is not null;
 
+    /// <summary>
+    /// El prefijo de la clave con la que se llamó: sus primeros 20
+    /// caracteres, los mismos que guarda api_keys.prefijo y que enseña la
+    /// pestaña Claves de acceso del panel.
+    ///
+    /// Solo para dejar rastro de QUÉ clave hizo un cambio (POST /v1/webhook
+    /// lo guarda en webhook_cambios) y poder encontrarla en esa pestaña para
+    /// revocarla. No es secreto: ya está a la vista en el panel, y con él
+    /// no se reconstruye la clave.
+    /// </summary>
+    public string? PrefijoClave { get; private set; }
+
     public TenantResuelto Exigir() =>
         Tenant ?? throw new InvalidOperationException(
             "No hay emisor en el contexto. El endpoint debería estar protegido.");
 
-    internal void Establecer(TenantResuelto tenant) => Tenant = tenant;
+    internal void Establecer(TenantResuelto tenant, string clave)
+    {
+        Tenant = tenant;
+        PrefijoClave = clave[..Math.Min(20, clave.Length)];
+    }
 }
 
 /// <summary>
@@ -83,7 +99,7 @@ public sealed class AutenticacionApiKey
             return;
         }
 
-        emisor.Establecer(tenant);
+        emisor.Establecer(tenant, clave);
 
         await _siguiente(contexto);
     }
@@ -99,6 +115,17 @@ public sealed class AutenticacionApiKey
         // Una clave de emisor jamás debe abrirlos, porque muestran datos
         // de todas las empresas.
         ruta.StartsWithSegments("/admin") ||
+
+        // El alta de emisores tampoco: va con la CLAVE DE ALTA (alt_), que
+        // comprueba su propio filtro contra claves_alta (EndpointsAlta). Una
+        // fac_ no abre esta ruta, y una alt_ no abre ninguna de /v1.
+        ruta.StartsWithSegments("/alta") ||
+
+        // El portal del receptor es público POR DISEÑO: lo abre el cliente
+        // de cada emisor, que no tiene clave ni cuenta. No muestra nada sin
+        // los cinco datos del comprobante o un acceso válido, y la empresa
+        // sale siempre de la dirección (EndpointsPortal).
+        ruta.StartsWithSegments("/portal") ||
 
         EsArchivoEstatico(ruta.Value) ||
 

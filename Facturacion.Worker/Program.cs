@@ -96,7 +96,19 @@ builder.Services.AddHostedService<ServicioBajas>();
 // Van en su propio servicio porque su fallo NO debe afectar a la facturación:
 // que el servidor de un cliente esté caído no puede impedir que las facturas
 // de los demás lleguen a SUNAT.
-builder.Services.AddHttpClient("webhooks");
+//
+// El cliente HTTP de los webhooks NO es uno cualquiera (DestinoWebhook): no
+// sigue redirecciones, no usa proxy y solo se conecta a IPs públicas que
+// comprueba él mismo al conectar. Desde que una clave fac_ puede registrar su
+// webhook, esto es lo que impide que el servicio haga peticiones hacia dentro.
+var reglasWebhook = ReglasDestinoWebhook.Resolver(builder.Environment.IsDevelopment());
+
+builder.Services.AddSingleton(reglasWebhook);
+
+builder.Services.AddHttpClient("webhooks")
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        DestinoWebhook.CrearManejador(reglasWebhook.PermitirLocales));
+
 builder.Services.AddSingleton(new RepositorioWebhooks(cadenaOperador));
 builder.Services.AddSingleton<DespachadorWebhooks>();
 
@@ -143,5 +155,14 @@ var host = builder.Build();
 host.Services.GetRequiredService<ILoggerFactory>()
     .CreateLogger("ValidacionPrevia")
     .LogInformation("{Diagnostico}", ValidacionPrevia.Diagnostico());
+
+// Lo mismo con los destinos de webhook: si el worker no está en Development,
+// el webhook de la plataforma en http://localhost se bloquea, y conviene
+// verlo aquí y no adivinarlo en las entregas agotadas.
+host.Services.GetRequiredService<ILoggerFactory>()
+    .CreateLogger("Webhooks")
+    .LogInformation("{Diagnostico} Entorno: {Entorno}.",
+        ReglasDestinoWebhook.Diagnostico(builder.Environment.IsDevelopment()),
+        builder.Environment.EnvironmentName);
 
 host.Run();

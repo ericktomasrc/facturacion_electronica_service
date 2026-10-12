@@ -8,6 +8,14 @@ namespace Facturacion.Api;
 /// El secreto de firma se muestra UNA sola vez al crearlos, igual que las
 /// claves de acceso. Sin él, el cliente no puede verificar que los avisos
 /// vienen de nosotros.
+///
+/// DESDE LA 023 HAY DOS ORÍGENES. Los de aquí son 'panel'. Los 'api' los
+/// registra la propia empresa con su clave (EndpointsWebhookApi): aquí se
+/// ven, se pueden desactivar y probar, pero su URL y su secreto los mantiene
+/// la plataforma al conectar.
+///
+/// NADA SE BORRA (punto 18): ya no hay DELETE. Se desactiva, y el webhook
+/// conserva su historial de entregas y de cambios.
 /// </summary>
 public static class EndpointsWebhooks
 {
@@ -25,25 +33,21 @@ public static class EndpointsWebhooks
 
         grupo.MapPost("", async (
             Guid id, NuevoWebhook nuevo,
-            RepositorioWebhooks webhooks, CancellationToken ct) =>
+            RepositorioWebhooks webhooks, ReglasDestinoWebhook reglas,
+            CancellationToken ct) =>
         {
-            if (!Uri.TryCreate(nuevo.Url, UriKind.Absolute, out var uri) ||
-                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-            {
-                return Results.BadRequest(new RespuestaError(
-                    "La URL no es válida.",
-                    "Debe ser una dirección completa que empiece con https://"));
-            }
+            // Las mismas reglas que /v1/webhook y que el worker al despachar:
+            // https y dirección pública, salvo en desarrollo con
+            // FACTURACION_WEBHOOKS_LOCALES. Un webhook del panel que el worker
+            // luego no pudiera entregar solo serviría para confundir.
+            var problema = await DestinoWebhook.RevisarAsync(
+                nuevo.Url, reglas.PermitirLocales, ct);
 
-            if (uri.Scheme == Uri.UriSchemeHttp)
-            {
-                // Se permite http en desarrollo, pero conviene decirlo: por ahí
-                // viajan datos de facturación de un cliente.
-                // No se bloquea para no impedir las pruebas locales.
-            }
+            if (problema is not null)
+                return Results.BadRequest(new RespuestaError("La URL no es válida.", problema));
 
             var (webhookId, secreto) = await webhooks.CrearAsync(
-                id, nuevo.Nombre, nuevo.Url, nuevo.Eventos ?? [], ct);
+                id, nuevo.Nombre, nuevo.Url.Trim(), nuevo.Eventos ?? [], ct);
 
             return Results.Ok(new
             {
@@ -67,28 +71,39 @@ public static class EndpointsWebhooks
             Guid id, Guid webhookId, CambioEstadoWebhook cambio,
             RepositorioWebhooks webhooks, CancellationToken ct) =>
         {
-            var cambiado = await webhooks.CambiarEstadoAsync(
+            var resultado = await webhooks.CambiarEstadoAsync(
                 id, webhookId, cambio.Activo, ct);
 
-            return cambiado
-                ? Results.Ok(new { mensaje = cambio.Activo
+            return resultado switch
+            {
+                null => Results.NotFound(new RespuestaError("No se encontró el webhook.")),
+
+                ResultadoCambioEstado.Conflicto => Results.Conflict(new RespuestaError(
+                    "La empresa ya tiene otro webhook de la API activo.",
+                    "Solo puede haber uno: con dos, cada factura se avisaría dos " +
+                    "veces. Desactiva el otro primero.")),
+
+                _ => Results.Ok(new { mensaje = cambio.Activo
                     ? "Webhook activado." : "Webhook desactivado." })
-                : Results.NotFound(new RespuestaError("No se encontró el webhook."));
+            };
         })
-        .WithSummary("Activa o desactiva un webhook");
+        .WithSummary("Activa o desactiva un webhook")
+        .WithDescription(
+            "Sustituye a «Eliminar»: nada se borra. El webhook desactivado deja " +
+            "de recibir avisos y conserva su historial.");
 
-        grupo.MapDelete("/{webhookId:guid}", async (
-            Guid id, Guid webhookId,
-            RepositorioWebhooks webhooks, CancellationToken ct) =>
-        {
-            var eliminado = await webhooks.EliminarAsync(id, webhookId, ct);
-
-            return eliminado
-                ? Results.Ok(new { mensaje = "Webhook eliminado." })
-                : Results.NotFound(new RespuestaError("No se encontró el webhook."));
-        })
-        .WithSummary("Elimina un webhook")
-        .WithDescription("También elimina su historial de entregas.");
+        app.MapGet("/admin/tenants/{id:guid}/webhook-cambios", async (
+            Guid id, RepositorioWebhooks webhooks, int? limite,
+            CancellationToken ct) =>
+            Results.Ok(await webhooks.CambiosAsync(
+                id, Math.Clamp(limite ?? 30, 1, 200), ct)))
+            .AddEndpointFilter<AutenticacionPanel>()
+            .AddEndpointFilter(new ExigirPermiso(Permiso.WebhooksGestionar))
+            .WithTags("Webhooks")
+            .WithSummary("Quién cambió los webhooks de la empresa")
+            .WithDescription(
+                "Altas y rotaciones hechas por la API (con el prefijo de la " +
+                "clave) y activaciones desde el panel. Nunca el secreto.");
 
         grupo.MapPost("/{webhookId:guid}/prueba", async (
             Guid id, Guid webhookId,
@@ -132,6 +147,7 @@ public static class EndpointsWebhooks
                     "entregas que agotaron sus intentos."));
         })
         .AddEndpointFilter<AutenticacionPanel>()
+        .AddEndpointFilter(new ExigirPermiso(Permiso.WebhooksGestionar))
         .WithTags("Webhooks")
         .WithSummary("Reintenta una entrega agotada")
         .WithDescription(

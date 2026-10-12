@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Comprobantes electrónicos</title>
+<style>
+  /* El color de la marca llega de la empresa (--marca y --sobre-marca se
+     ponen desde el script). Todo lo demás es neutro a propósito: la página
+     tiene que verse del emisor, no de quien la sirve. */
+  :root {
+    --fondo:#f5f6f8; --panel:#ffffff; --sutil:#f0f2f5; --borde:#e2e5ea;
+    --texto:#1a1d21; --tenue:#5d6672;
+    --ok:#15803d; --ok-fondo:#eaf6ee;
+    --mal:#b42318; --mal-fondo:#fdecea;
+    --aviso:#9a6700; --aviso-fondo:#fdf6e3;
+    --marca:#334155; --sobre-marca:#ffffff;
+    --radio:10px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo:#0f1115; --panel:#171a21; --sutil:#1d222b; --borde:#2a303c;
+      --texto:#e7e9ed; --tenue:#9aa3af;
+      --ok:#3fb950; --ok-fondo:#13261a;
+      --mal:#f47067; --mal-fondo:#2c1517;
+      --aviso:#d4a72c; --aviso-fondo:#2a2312;
+    }
+  }
+
+  * { box-sizing:border-box; }
+
+  body { margin:0; background:var(--fondo); color:var(--texto);
+         font:16px/1.55 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; }
+
+  .franja { height:5px; background:var(--marca); }
+
+  .contenedor { max-width:620px; margin:0 auto; padding:28px 16px 40px; }
+
+  header { display:flex; align-items:center; gap:16px; margin-bottom:26px; }
+
+  /* El logo va sobre blanco en los dos temas: así está diseñado casi
+     cualquier logo, y así sale en el PDF. */
+  .logo { background:#fff; border:1px solid var(--borde); border-radius:var(--radio);
+          padding:8px; height:64px; max-width:180px; display:flex;
+          align-items:center; justify-content:center; flex:none; }
+  .logo img { max-height:100%; max-width:100%; }
+
+  .empresa h1 { margin:0; font-size:20px; font-weight:600; line-height:1.25; }
+  .empresa .ruc { color:var(--tenue); font-size:14px; margin-top:2px; }
+
+  .tarjeta { background:var(--panel); border:1px solid var(--borde);
+             border-radius:14px; padding:22px 22px 24px; margin-bottom:16px; }
+
+  h2 { font-size:17px; margin:0 0 4px; font-weight:600; }
+  .ayuda { color:var(--tenue); font-size:14px; margin:0 0 18px; }
+
+  .rejilla { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .ancho { grid-column:1 / -1; }
+  @media (max-width:520px) { .rejilla { grid-template-columns:1fr; } }
+
+  label { display:block; font-size:13.5px; color:var(--tenue); margin-bottom:5px; }
+
+  input, select { width:100%; font:inherit; font-size:16px; color:var(--texto);
+                  background:var(--panel); border:1px solid var(--borde);
+                  border-radius:var(--radio); padding:10px 12px; }
+  input:focus, select:focus { outline:2px solid var(--marca); outline-offset:1px;
+                              border-color:transparent; }
+
+  .boton { display:inline-flex; align-items:center; justify-content:center; gap:8px;
+           font:inherit; font-size:15px; font-weight:600; cursor:pointer;
+           border-radius:var(--radio); padding:11px 18px; border:1px solid var(--borde);
+           background:var(--panel); color:var(--texto); }
+  .boton:disabled { opacity:.55; cursor:default; }
+  .boton.principal { background:var(--marca); border-color:var(--marca);
+                     color:var(--sobre-marca); width:100%; margin-top:20px; }
+  .boton svg { width:17px; height:17px; stroke:currentColor; fill:none;
+               stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+
+  .mensaje { border-radius:var(--radio); padding:12px 14px; font-size:14.5px;
+             margin-top:16px; display:none; }
+  .mensaje.visible { display:block; }
+  .mensaje.mal { background:var(--mal-fondo); color:var(--mal); }
+  .mensaje .detalle { display:block; font-size:13.5px; margin-top:3px; opacity:.9; }
+
+  .nota { font-size:13.5px; color:var(--tenue); margin-top:16px;
+          border-top:1px solid var(--borde); padding-top:14px; }
+
+  .resultado .tipo { font-size:13.5px; color:var(--tenue); }
+  .resultado .numero { font-size:22px; font-weight:600; margin:2px 0 10px;
+                       font-variant-numeric:tabular-nums; }
+
+  .estado { display:inline-block; font-size:13px; font-weight:600;
+            padding:3px 10px; border-radius:999px; margin-bottom:16px; }
+  .estado.ok { background:var(--ok-fondo); color:var(--ok); }
+  .estado.anulado { background:var(--mal-fondo); color:var(--mal); }
+
+  dl { display:grid; grid-template-columns:auto 1fr; gap:6px 16px; margin:0 0 20px;
+       font-size:15px; }
+  dt { color:var(--tenue); }
+  dd { margin:0; font-variant-numeric:tabular-nums; }
+
+  .descargas { display:flex; gap:10px; flex-wrap:wrap; }
+  .descargas .boton { flex:1 1 140px; }
+
+  .enlace { background:none; border:none; padding:0; font:inherit; font-size:14.5px;
+            color:var(--texto); text-decoration:underline; cursor:pointer;
+            margin-top:18px; }
+
+  footer { color:var(--tenue); font-size:12.5px; text-align:center; margin-top:26px;
+           line-height:1.6; }
+
+  .oculto { display:none !important; }
+  .vacio { text-align:center; color:var(--tenue); padding:40px 0; }
+</style>
+</head>
+<body>
+
+<div class="franja"></div>
+
+<div class="contenedor">
+
+  <header id="cabecera" class="oculto">
+    <div class="logo oculto" id="logo"></div>
+    <div class="empresa">
+      <h1 id="nombre"></h1>
+      <div class="ruc" id="ruc"></div>
+    </div>
+  </header>
+
+  <div id="cargando" class="vacio">Cargando…</div>
+
+  <div id="no-existe" class="tarjeta oculto">
+    <h2>Esta página no existe</h2>
+    <p class="ayuda" style="margin:0">Revisa la dirección. Si llegaste desde un
+      correo, usa el enlace tal como vino.</p>
+  </div>
+
+  <!-- Búsqueda: los cinco datos -->
+  <section id="busqueda" class="tarjeta oculto" aria-labelledby="t-busqueda">
+    <h2 id="t-busqueda">Busca tu comprobante</h2>
+    <p class="ayuda">Escribe los datos tal como aparecen en el comprobante.</p>
+
+    <form id="formulario" novalidate>
+      <div class="rejilla">
+        <div>
+          <label for="tipo">Tu tipo de documento</label>
+          <select id="tipo">
+            <option value="6">RUC</option>
+            <option value="1">DNI</option>
+            <option value="4">Carné de extranjería</option>
+            <option value="7">Pasaporte</option>
+          </select>
+        </div>
+        <div>
+          <label for="documento">Tu número de documento</label>
+          <input id="documento" inputmode="numeric" autocomplete="off" maxlength="15">
+        </div>
+        <div>
+          <label for="serie">Serie</label>
+          <input id="serie" placeholder="F001" maxlength="4" autocomplete="off"
+                 style="text-transform:uppercase">
+        </div>
+        <div>
+          <label for="numero">Número</label>
+          <input id="numero" inputmode="numeric" placeholder="96" maxlength="8" autocomplete="off">
+        </div>
+        <div>
+          <label for="fecha">Fecha de emisión</label>
+          <input id="fecha" type="date">
+        </div>
+        <div>
+          <label for="importe">Importe total</label>
+          <input id="importe" inputmode="decimal" placeholder="100.01" autocomplete="off">
+        </div>
+      </div>
+
+      <button class="boton principal" id="buscar" type="submit">Buscar</button>
+    </form>
+
+    <div class="mensaje mal" id="error" role="alert"></div>
+
+    <div class="nota">
+      Si tu comprobante es una boleta sin documento, ábrelo con el enlace del
+      correo que recibiste.
+    </div>
+  </section>
+
+  <!-- El comprobante encontrado -->
+  <section id="resultado" class="tarjeta resultado oculto" aria-live="polite">
+    <div class="tipo" id="r-tipo"></div>
+    <div class="numero" id="r-numero"></div>
+    <span class="estado" id="r-estado"></span>
+
+    <dl>
+      <dt>Fecha de emisión</dt><dd id="r-fecha"></dd>
+      <dt>Importe total</dt><dd id="r-importe"></dd>
+      <dt>Cliente</dt><dd id="r-cliente"></dd>
+    </dl>
+
+    <div class="descargas" id="descargas"></div>
+    <div class="mensaje mal" id="error-descarga" role="alert"></div>
+
+    <button class="enlace" id="otro" type="button">Buscar otro comprobante</button>
+  </section>
+
+  <footer id="pie" class="oculto"></footer>
+</div>
+
+<script>
+// ---------------------------------------------------------------- dirección
+//
+// En producción el navegador ve comprobantes.reyban.pe/{empresa} y el proxy
+// añade /portal por delante. En desarrollo se entra directo a
+// /portal/{empresa}. La página funciona en los dos casos.
+
+const elem = id => document.getElementById(id);
+
+const BASE = location.pathname.startsWith("/portal/") ? "/portal" : "";
+const partes = location.pathname.slice(BASE.length).split("/").filter(Boolean);
+const EMPRESA = partes[0] || "";
+const ENLACE = partes[1] === "e" ? (partes[2] || "") : "";
+const API = `${BASE}/api/${encodeURIComponent(EMPRESA)}`;
+
+// El acceso vive solo en memoria. Si llegó en la dirección (enlace del
+// correo), se quita de la barra en cuanto se lee: así no queda en el
+// historial a la vista de quien use el mismo equipo después.
+let acceso = ENLACE || null;
+
+if (ENLACE) history.replaceState(null, "", `${BASE}/${EMPRESA}`);
+
+const MONEDAS = { PEN: "PEN", USD: "USD", EUR: "EUR" };
+
+const dinero = (valor, moneda) => {
+  try {
+    return new Intl.NumberFormat("es-PE", { style: "currency",
+      currency: MONEDAS[moneda] || "PEN" }).format(valor);
+  } catch { return `${moneda} ${Number(valor).toFixed(2)}`; }
+};
+
+// "2026-10-10" → "10/10/2026". Es un día, no un instante: no se convierte.
+const dia = v => { const [a, m, d] = String(v).split("-"); return `${d}/${m}/${a}`; };
+
+function mostrar(id, visible = true) { elem(id).classList.toggle("oculto", !visible); }
+
+function error(id, titulo, detalle = "") {
+  const caja = elem(id);
+  caja.innerHTML = "";
+  if (!titulo) { caja.classList.remove("visible"); return; }
+  caja.textContent = titulo;
+  if (detalle) {
+    const d = document.createElement("span");
+    d.className = "detalle";
+    d.textContent = detalle;
+    caja.appendChild(d);
+  }
+  caja.classList.add("visible");
+}
+
+// ------------------------------------------------------------------- marca
+
+// El texto sobre el color de la marca: blanco o casi negro, el que se lea.
+function textoSobre(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const canal = c => { c /= 255; return c <= .03928 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4; };
+  const l = .2126 * canal(n >> 16 & 255) + .7152 * canal(n >> 8 & 255) + .0722 * canal(n & 255);
+  return l > .4 ? "#111418" : "#ffffff";
+}
+
+async function cargarMarca() {
+  const r = await fetch(API);
+
+  if (!r.ok) {
+    mostrar("cargando", false);
+    mostrar("no-existe");
+    return false;
+  }
+
+  const m = await r.json();
+  const nombre = m.nombreComercial || m.razonSocial;
+
+  document.title = `Comprobantes · ${nombre}`;
+  elem("nombre").textContent = nombre;
+  elem("ruc").textContent = `RUC ${m.ruc}`;
+
+  if (m.color && /^#[0-9a-f]{6}$/i.test(m.color)) {
+    document.documentElement.style.setProperty("--marca", m.color);
+    document.documentElement.style.setProperty("--sobre-marca", textoSobre(m.color));
+  }
+
+  if (m.tieneLogo) {
+    const img = document.createElement("img");
+    img.src = `${API}/logo`;
+    img.alt = `Logo de ${nombre}`;
+    img.onerror = () => mostrar("logo", false);
+    elem("logo").appendChild(img);
+    mostrar("logo");
+  }
+
+  elem("pie").textContent =
+    `Comprobantes electrónicos de ${m.razonSocial} · RUC ${m.ruc}. ` +
+    "También puedes consultar su validez en el portal de SUNAT.";
+
+  mostrar("cabecera");
+  mostrar("pie");
+  return true;
+}
+
+// ---------------------------------------------------------------- búsqueda
+
+elem("formulario").onsubmit = async ev => {
+  ev.preventDefault();
+  error("error", "");
+
+  const datos = {
+    tipoDocumento: elem("tipo").value,
+    numeroDocumento: elem("documento").value.trim(),
+    serie: elem("serie").value.trim().toUpperCase(),
+    numero: elem("numero").value.trim(),
+    fechaEmision: elem("fecha").value,
+    importeTotal: elem("importe").value.trim()
+  };
+
+  const falta = Object.entries(datos).find(([, v]) => !v);
+  if (falta) {
+    error("error", "Completa los seis campos.");
+    return;
+  }
+
+  const boton = elem("buscar");
+  boton.disabled = true;
+  boton.textContent = "Buscando…";
+
+  try {
+    const r = await fetch(`${API}/buscar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(datos)
+    });
+
+    const cuerpo = await r.json().catch(() => ({}));
+
+    if (!r.ok) {
+      error("error", cuerpo.error || "No se pudo buscar.", cuerpo.detalle || "");
+      return;
+    }
+
+    acceso = cuerpo.acceso;
+    pintar(cuerpo.comprobante);
+
+  } catch {
+    error("error", "No se pudo conectar. Revisa tu conexión e inténtalo otra vez.");
+  } finally {
+    boton.disabled = false;
+    boton.textContent = "Buscar";
+  }
+};
+
+// --------------------------------------------------------------- resultado
+
+const ICONO = `<svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4"/><path d="M5 19h14"/></svg>`;
+
+function pintar(c) {
+  elem("r-tipo").textContent = c.tipoNombre;
+  elem("r-numero").textContent = c.numero;
+
+  const estado = elem("r-estado");
+  estado.textContent = c.estado;
+  estado.className = "estado " + (c.anulado ? "anulado" : "ok");
+
+  elem("r-fecha").textContent = dia(c.fechaEmision);
+  elem("r-importe").textContent = dinero(c.importeTotal, c.moneda);
+  elem("r-cliente").textContent = c.receptor || "—";
+
+  const lista = [["pdf", "PDF"], ["xml", "XML"], ["cdr", "CDR de SUNAT"]]
+    .filter(([clave]) => c.archivos[clave]);
+
+  elem("descargas").innerHTML = "";
+
+  for (const [clave, texto] of lista) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "boton" + (clave === "pdf" ? " principal" : "");
+    if (clave === "pdf") b.style.marginTop = "0";
+    b.innerHTML = `${ICONO}<span></span>`;
+    b.querySelector("span").textContent = texto;
+    b.onclick = () => descargar(clave, b);
+    elem("descargas").appendChild(b);
+  }
+
+  error("error-descarga", "");
+  mostrar("busqueda", false);
+  mostrar("resultado");
+  elem("resultado").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// El acceso va en una cabecera, no en la dirección: por eso se descarga con
+// fetch y se entrega al navegador como archivo.
+async function descargar(tipo, boton) {
+  boton.disabled = true;
+  error("error-descarga", "");
+
+  try {
+    const r = await fetch(`${API}/comprobante/${tipo}`,
+      { headers: { "X-Portal-Acceso": acceso } });
+
+    if (!r.ok) {
+      const cuerpo = await r.json().catch(() => ({}));
+      error("error-descarga", cuerpo.error || "No se pudo descargar.", cuerpo.detalle || "");
+      return;
+    }
+
+    const nombre = (r.headers.get("content-disposition") || "")
+      .match(/filename="?([^";]+)"?/)?.[1] || `comprobante.${tipo === "cdr" ? "zip" : tipo}`;
+
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = nombre;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+  } catch {
+    error("error-descarga", "No se pudo descargar. Revisa tu conexión.");
+  } finally {
+    boton.disabled = false;
+  }
+}
+
+elem("otro").onclick = () => {
+  acceso = null;
+  mostrar("resultado", false);
+  mostrar("busqueda");
+  elem("documento").focus();
+};
+
+// ---------------------------------------------------------------- arranque
+
+(async () => {
+  if (!EMPRESA || !(await cargarMarca().catch(() => false))) {
+    mostrar("cargando", false);
+    mostrar("no-existe");
+    return;
+  }
+
+  mostrar("cargando", false);
+
+  // Llegó con el enlace del correo: se abre directamente el comprobante.
+  if (acceso) {
+    try {
+      const r = await fetch(`${API}/comprobante`, { headers: { "X-Portal-Acceso": acceso } });
+      const cuerpo = await r.json().catch(() => ({}));
+
+      if (r.ok) { pintar(cuerpo.comprobante); return; }
+
+      acceso = null;
+      mostrar("busqueda");
+      error("error", cuerpo.error || "Este enlace ya no es válido.", cuerpo.detalle || "");
+      return;
+    } catch { acceso = null; }
+  }
+
+  mostrar("busqueda");
+})();
+</script>
+</body>
+</html>

@@ -31,6 +31,7 @@ builder.Services.AddSingleton(new FabricaSesiones(cadenaConexion));
 builder.Services.AddSingleton(new RepositorioDiagnostico(cadenaOperador));
 builder.Services.AddSingleton<RepositorioTenants>();
 builder.Services.AddSingleton<RepositorioComprobantes>();
+builder.Services.AddSingleton<RepositorioPortal>();
 
 // ALMACÉN COMPARTIDO CON EL WORKER.
 //
@@ -59,7 +60,23 @@ builder.Services.AddSingleton(FabricaAlmacen.Crear(opcionesAlmacen));
 // Administración de empresas, series y claves.
 builder.Services.AddSingleton(new RepositorioAdmin(cadenaOperador));
 builder.Services.AddSingleton(new RepositorioWebhooks(cadenaOperador));
+
+// El webhook de la propia empresa (POST/GET /v1/webhook). Este NO usa el rol
+// de operador: va con facturacion_app y RLS, con la empresa de la clave.
+builder.Services.AddSingleton<RepositorioWebhookApi>();
+
+// A dónde se pueden registrar webhooks: https y direcciones públicas, salvo
+// en Development con FACTURACION_WEBHOOKS_LOCALES=true. El worker aplica la
+// misma regla al despachar.
+builder.Services.AddSingleton(
+    ReglasDestinoWebhook.Resolver(builder.Environment.IsDevelopment()));
 builder.Services.AddSingleton(new RepositorioConsultas(cadenaOperador));
+
+// El alta de emisores desde la plataforma y las claves de alta (024). Con el
+// rol de operador, como el panel: crea filas que la aplicación solo lee. Lo
+// que la acota está en RepositorioAltas (y el rol propio es el punto 23).
+builder.Services.AddSingleton(new RepositorioAltas(cadenaOperador));
+builder.Services.AddScoped<ContextoClaveAlta>();
 builder.Services.AddSingleton(new RepositorioRoles(cadenaOperador));
 
 // Las guías tienen su propio repositorio: otra tabla, otro canal y otro
@@ -90,11 +107,21 @@ var opcionesCorreo = new OpcionesCorreo
     Clave = ConfiguracionSecretos.Opcional("MAIL_CLAVE", ""),
     Desde = ConfiguracionSecretos.Opcional("MAIL_DESDE", ""),
     Nombre = ConfiguracionSecretos.Opcional("MAIL_NOMBRE", "Facturación electrónica"),
-    UrlPanel = ConfiguracionSecretos.Opcional("PANEL_URL", "https://localhost:7295")
+    UrlPanel = ConfiguracionSecretos.Opcional("PANEL_URL", "https://localhost:7295"),
+
+    // La dirección pública del portal del receptor, para el enlace del
+    // correo de entrega. En producción: https://comprobantes.reyban.pe.
+    // Vacía: la del panel con /portal, que es lo que sirve en desarrollo.
+    UrlPortal = ConfiguracionSecretos.Opcional("PORTAL_URL", "")
 };
 
 builder.Services.AddSingleton(opcionesCorreo);
 builder.Services.AddSingleton<ServicioCorreo>();
+
+// El correo de entrega del portal: la cola (rol de operador, recorre todas
+// las empresas) y el proceso que la vacía cada 30 segundos.
+builder.Services.AddSingleton(new RepositorioCorreosPortal(cadenaOperador));
+builder.Services.AddHostedService<ServicioCorreosEntrega>();
 
 // El repositorio de usuarios necesita el protector para cifrar el secreto
 // del segundo factor, igual que los certificados.
@@ -262,6 +289,11 @@ if (!opcionesCorreo.Configurado)
     }
 }
 
+// Se dice al arrancar qué destinos de webhook se aceptan. El modo de fallo
+// sería el silencio: rechazar el localhost de la plataforma sin saber por qué.
+app.Logger.LogInformation("{Diagnostico}",
+    ReglasDestinoWebhook.Diagnostico(app.Environment.IsDevelopment()));
+
 // Sirve el panel desde wwwroot.
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -278,6 +310,8 @@ app.MapearRoles();
 app.MapearDiagnostico();
 app.MapearAdministracion();
 app.MapearWebhooks();
+app.MapearWebhookApi();
+app.MapearAlta();
 app.MapearConsultas();
 app.MapearNotas();
 app.MapearDescargas();
@@ -287,6 +321,8 @@ app.MapearRetencionPercepcion();
 app.MapearBajas();
 app.MapearAnulacionBoletas();
 app.MapearEstadoSunat();
+app.MapearPortal();
+app.MapearPortalAdmin();
 
 app.MapGet("/health", () => Results.Ok(new { estado = "vivo" }))
    .WithName("Salud")
@@ -330,6 +366,13 @@ app.MapPost("/v1/comprobantes", async (
     if (peticion.Lineas.Count == 0)
         return Results.BadRequest(new RespuestaError(
             "El comprobante necesita al menos una línea."));
+
+    // El correo del receptor es opcional, pero si viene tiene que tener forma
+    // de correo: un comprobante aceptado cuyo correo rebota es un cliente que
+    // cree que no le facturaron.
+    if (peticion.Receptor.ProblemaCorreo() is { } problemaCorreo)
+        return Results.BadRequest(new RespuestaError(
+            "El correo del receptor no es válido.", problemaCorreo));
 
     if (peticion.Moneda != "PEN" && peticion.TipoCambio is null)
         return Results.BadRequest(new RespuestaError(
@@ -506,6 +549,7 @@ app.MapPost("/v1/comprobantes", async (
                 ? null
                 : JsonSerializer.Serialize(peticion.Extra),
             idempotencyKey: string.IsNullOrWhiteSpace(idempotencyKey) ? null : idempotencyKey,
+            correoReceptor: peticion.Receptor.CorreoLimpio(),
             ct: ct);
 
         var respuesta = RespuestaComprobante.Desde(guardado, peticion.Moneda);
@@ -652,21 +696,83 @@ app.MapGet("/v1/comprobantes/{id:guid}/historial", async (
 
 
 /// Datos del emisor autenticado. Útil para verificar que la clave funciona.
-app.MapGet("/v1/emisor", (ContextoEmisor emisor) =>
+app.MapGet("/v1/emisor", async (
+    ContextoEmisor emisor, AlmacenCertificados certificados,
+    RepositorioAltas altas, CancellationToken ct) =>
 {
     var tenant = emisor.Exigir();
+
+    // EL VENCIMIENTO DEL CERTIFICADO, para que quien integra avise antes.
+    //
+    // El dato existía, pero solo en `/admin/tenants/{id}/certificados`, que va
+    // con la sesión del panel y cruza empresas: nadie de fuera puede ni debe
+    // usar esa ruta. Aquí sale solo la fecha del activo de ESTA empresa.
+    // Null si no tiene certificado cargado.
+    var validoHasta = await certificados.VencimientoActivoAsync(tenant.Id, ct);
+
+    // LO QUE LA PLATAFORMA REFLEJA (diseño §13.4): si el alta está confirmada,
+    // la marca, y qué falta para poder emitir. Solo «está o no está» y datos
+    // de esta misma empresa: ningún secreto.
+    var e = await altas.EstadoAsync(tenant.Id, ct);
 
     return Results.Ok(new
     {
         ruc = tenant.Ruc,
         razonSocial = tenant.RazonSocial,
-        ambiente = tenant.Ambiente
+        nombreComercial = tenant.NombreComercial,
+        ambiente = tenant.Ambiente,
+        certificadoValidoHasta = validoHasta,
+        certificadoDiasParaVencer = validoHasta is { } h
+            ? (int?)Math.Ceiling((h - DateTime.UtcNow).TotalDays)
+            : null,
+
+        alta = new
+        {
+            estado = e.EstadoAlta,
+            creadoEn = e.CreadoEn,
+            confirmadaEn = e.AltaConfirmadaEn
+        },
+
+        // Sin los dos, NINGÚN receptor recibe su correo: el disparador de la
+        // 022 se lo salta sin avisar, y lo aceptado mientras tanto no lo
+        // recibe nunca.
+        portal = new
+        {
+            identificador = e.Identificador,
+            correoRespuesta = e.CorreoRespuesta,
+            tieneLogo = e.TieneLogo,
+            correosAlReceptor = e.CorreosAlReceptor
+        },
+
+        direccion = new
+        {
+            ubigeo = e.Ubigeo,
+            direccion = e.Direccion,
+            distrito = e.Distrito,
+            provincia = e.Provincia,
+            departamento = e.Departamento,
+            revisadaEn = e.DireccionRevisadaEn
+        },
+
+        listo = new
+        {
+            paraEmitir = e.ListoParaEmitir,
+            certificado = e.CertificadoListo,
+            sol = e.SolListo,
+            series = e.Series,
+            direccion = e.DireccionLista,
+            faltan = e.Faltan()
+        }
     });
 })
 .WithName("Emisor")
 .WithTags("Servicio")
 .WithSummary("Datos del emisor autenticado")
-.WithDescription("Sirve para verificar que una clave de acceso funciona.");
+.WithDescription(
+    "Sirve para verificar que una clave de acceso funciona, y para saber qué le " +
+    "falta a la empresa: «listo» dice si puede emitir (certificado vigente, usuario " +
+    "SOL secundario, al menos una serie y la dirección revisada) y «portal» si sus " +
+    "receptores van a recibir el correo de entrega (identificador y correo de respuesta).");
 
 app.Run();
 

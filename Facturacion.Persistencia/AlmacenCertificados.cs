@@ -164,6 +164,36 @@ public sealed class AlmacenCertificados
         return AbrirPfx(pfx, clave);
     }
 
+    /// <summary>
+    /// Hasta cuándo vale el certificado ACTIVO de la empresa, o null si no
+    /// tiene ninguno.
+    ///
+    /// EXISTE PARA `GET /v1/emisor`: es lo que necesita quien integra —la
+    /// plataforma, o cualquier otro— para avisar antes de que venza. Cuando
+    /// vence, la emisión se detiene en seco y descubrir por qué lleva una hora.
+    /// Solo la fecha: nada del certificado en sí sale de aquí.
+    /// </summary>
+    public async Task<DateTime?> VencimientoActivoAsync(
+        Guid tenantId, CancellationToken ct = default)
+    {
+        await using var sesion = await _sesiones.AbrirAsync(tenantId, ct);
+
+        var hasta = await sesion.Conexion.ExecuteScalarAsync<DateTime?>(
+            new CommandDefinition(
+                """
+                SELECT valido_hasta
+                  FROM certificados
+                 WHERE tenant_id = @tenantId
+                   AND activo
+                """,
+                new { tenantId },
+                sesion.Transaccion, cancellationToken: ct));
+
+        await sesion.ConfirmarAsync(ct);
+
+        return hasta;
+    }
+
     /// <summary>Lista los certificados del tenant, sin material sensible.</summary>
     public async Task<IReadOnlyList<CertificadoInfo>> ListarAsync(
         Guid tenantId, CancellationToken ct = default)

@@ -138,6 +138,10 @@ public static class EndpointsNotas
             return Results.BadRequest(new RespuestaError(
                 "La nota necesita al menos una línea."));
 
+        if (peticion.Receptor.ProblemaCorreo() is { } problemaCorreo)
+            return Results.BadRequest(new RespuestaError(
+                "El correo del receptor no es válido.", problemaCorreo));
+
         if (peticion.Moneda != "PEN" && peticion.TipoCambio is null)
             return Results.BadRequest(new RespuestaError(
                 "Falta el tipo de cambio.",
@@ -214,6 +218,7 @@ public static class EndpointsNotas
                     : JsonSerializer.Serialize(peticion.Extra),
                 idempotencyKey: string.IsNullOrWhiteSpace(idempotencyKey)
                     ? null : idempotencyKey,
+                correoReceptor: peticion.Receptor.CorreoLimpio(),
                 ct: ct);
 
             var respuesta = RespuestaComprobante.Desde(guardado, peticion.Moneda);

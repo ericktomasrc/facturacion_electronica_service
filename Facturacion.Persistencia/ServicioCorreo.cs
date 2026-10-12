@@ -23,6 +23,19 @@ public sealed class OpcionesCorreo
     /// </summary>
     public string UrlPanel { get; set; } = "https://localhost:7295";
 
+    /// <summary>
+    /// Dirección base del portal del receptor, para el enlace del correo de
+    /// entrega. En producción, https://comprobantes.reyban.pe (variable
+    /// PORTAL_URL). Vacía: la del panel con /portal, que es lo que sirve en
+    /// desarrollo.
+    /// </summary>
+    public string UrlPortal { get; set; } = "";
+
+    public string UrlPortalEfectiva =>
+        string.IsNullOrWhiteSpace(UrlPortal)
+            ? UrlPanel.TrimEnd('/') + "/portal"
+            : UrlPortal.TrimEnd('/');
+
     public bool Configurado =>
         !string.IsNullOrWhiteSpace(Host) && !string.IsNullOrWhiteSpace(Desde);
 }
@@ -120,6 +133,102 @@ public sealed class ServicioCorreo
                 asunto, para);
 
             return false;
+        }
+    }
+
+    // ------------------------------------------------- correo de entrega
+
+    /// <summary>
+    /// El correo con el comprobante, en nombre del emisor.
+    ///
+    /// LO QUE LO HACE DISTINTO DE LOS CORREOS DEL PANEL:
+    ///
+    ///   - "De": el NOMBRE es el del emisor, la DIRECCIÓN es la nuestra
+    ///     (MAIL_DESDE). Mandar desde la dirección del emisor sería suplantar
+    ///     su dominio, y los filtros lo tirarían a spam.
+    ///   - "Responder a": el correo de respuesta del emisor. Si el cliente
+    ///     contesta, le llega a quien le vendió, no a nosotros.
+    ///   - Puede llevar el PDF adjunto y el logo incrustado (cid:logo-emisor),
+    ///     que se ve aunque el cliente de correo bloquee las imágenes de
+    ///     fuera.
+    ///   - Puede llevar COPIA OCULTA al emisor (migración 026, opcional y
+    ///     desactivada por defecto): el receptor no la ve. Va DESPUÉS de `ct`
+    ///     para no romper a quien ya llama pasando `ct` por posición.
+    ///
+    /// Devuelve null si salió, o el motivo si no. No lanza: quien llama
+    /// decide si reintenta.
+    /// </summary>
+    public async Task<string?> EnviarEntregaAsync(
+        string para, string nombreRemitente, string responderA,
+        string asunto, string html, string texto,
+        AdjuntoCorreo? adjunto, AdjuntoCorreo? logo,
+        CancellationToken ct = default,
+        string? copiaOculta = null)
+    {
+        if (!Disponible)
+            return "El correo no está configurado (MAIL_HOST, MAIL_DESDE).";
+
+        try
+        {
+            var mensaje = new MimeMessage();
+
+            mensaje.From.Add(new MailboxAddress(nombreRemitente, _opciones.Desde));
+            mensaje.ReplyTo.Add(MailboxAddress.Parse(responderA));
+            mensaje.To.Add(MailboxAddress.Parse(para));
+
+            // La copia al emisor, OCULTA. No si es la misma dirección que el
+            // receptor (el emisor facturándose a sí mismo): llegaría dos veces.
+            if (!string.IsNullOrWhiteSpace(copiaOculta) &&
+                !string.Equals(copiaOculta.Trim(), para.Trim(), StringComparison.OrdinalIgnoreCase))
+                mensaje.Bcc.Add(MailboxAddress.Parse(copiaOculta.Trim()));
+
+            mensaje.Subject = asunto;
+
+            // Es un correo automático: que nadie conteste con un "fuera de
+            // la oficina" que vuelva al emisor como si fuera una respuesta.
+            mensaje.Headers.Add("Auto-Submitted", "auto-generated");
+            mensaje.Headers.Add("X-Auto-Response-Suppress", "All");
+
+            var cuerpo = new BodyBuilder { HtmlBody = html, TextBody = texto };
+
+            if (logo is not null)
+            {
+                var recurso = cuerpo.LinkedResources.Add(
+                    logo.Nombre, logo.Datos, ContentType.Parse(logo.TipoMime));
+                recurso.ContentId = "logo-emisor";
+            }
+
+            if (adjunto is not null)
+                cuerpo.Attachments.Add(
+                    adjunto.Nombre, adjunto.Datos, ContentType.Parse(adjunto.TipoMime));
+
+            mensaje.Body = cuerpo.ToMessageBody();
+
+            using var cliente = new SmtpClient();
+
+            var seguridad = _opciones.Puerto == 465
+                ? SecureSocketOptions.SslOnConnect
+                : SecureSocketOptions.StartTls;
+
+            await cliente.ConnectAsync(_opciones.Host, _opciones.Puerto, seguridad, ct);
+
+            if (!string.IsNullOrWhiteSpace(_opciones.Usuario))
+                await cliente.AuthenticateAsync(_opciones.Usuario, _opciones.Clave, ct);
+
+            await cliente.SendAsync(mensaje, ct);
+            await cliente.DisconnectAsync(true, ct);
+
+            _log.LogInformation("Correo de entrega '{Asunto}' enviado.", asunto);
+
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // En el registro no va la dirección del cliente: es un dato suyo,
+            // y ya queda en la cola, que es donde se mira.
+            _log.LogWarning(ex, "No se pudo enviar el correo de entrega '{Asunto}'.", asunto);
+
+            return ex.Message;
         }
     }
 
@@ -244,3 +353,6 @@ public sealed class ServicioCorreo
             .Replace("&raquo;", "\"")
             .Replace("&amp;", "&");
 }
+
+/// <summary>Un archivo que va en un correo: adjunto o incrustado.</summary>
+public sealed record AdjuntoCorreo(string Nombre, string TipoMime, byte[] Datos);

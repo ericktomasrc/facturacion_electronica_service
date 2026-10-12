@@ -40,14 +40,17 @@ public sealed class DespachadorWebhooks
 
     private readonly RepositorioWebhooks _webhooks;
     private readonly HttpClient _http;
+    private readonly ReglasDestinoWebhook _reglas;
     private readonly ILogger<DespachadorWebhooks> _log;
 
     public DespachadorWebhooks(
         RepositorioWebhooks webhooks,
         IHttpClientFactory fabricaHttp,
+        ReglasDestinoWebhook reglas,
         ILogger<DespachadorWebhooks> log)
     {
         _webhooks = webhooks;
+        _reglas = reglas;
         _log = log;
 
         _http = fabricaHttp.CreateClient("webhooks");
@@ -79,6 +82,27 @@ public sealed class DespachadorWebhooks
     private async Task EntregarAsync(EntregaPendiente entrega, CancellationToken ct)
     {
         var cronometro = Stopwatch.StartNew();
+
+        // LA URL SE REVISA OTRA VEZ AL DESPACHAR, no solo al registrarla: los
+        // webhooks de antes de la 023 se registraron sin estas reglas (http,
+        // IPs privadas), y las reglas pueden cambiar de un entorno a otro.
+        // La IP la comprueba además el manejador HTTP al conectar
+        // (DestinoWebhook.CrearManejador).
+        var problema = DestinoWebhook.RevisarForma(entrega.Url, _reglas.PermitirLocales);
+
+        if (problema is not null)
+        {
+            _log.LogWarning(
+                "Webhook {Tipo} bloqueado, no se envía: {Problema}", entrega.Tipo, problema);
+
+            // Como un 4xx: reintentar no lo arregla. Queda AGOTADO, a la
+            // vista en el panel, hasta que alguien corrija la URL.
+            await _webhooks.RegistrarFalloAsync(
+                entrega.Id, MaximoIntentos, MaximoIntentos, null,
+                "Bloqueado: " + problema, TimeSpan.Zero, ct);
+
+            return;
+        }
 
         try
         {
@@ -113,6 +137,10 @@ public sealed class DespachadorWebhooks
                 return;
             }
 
+            // UN 3xx TAMPOCO: el cliente HTTP no sigue redirecciones (una
+            // redirección hacia una IP interna sería la misma puerta por otro
+            // lado). Se registra con su código y se corrige la URL.
+            //
             // UN 4xx NO SE REINTENTA, salvo el 429.
             //
             // Un 404 o un 401 significan que la URL está mal o que el cliente
@@ -141,6 +169,16 @@ public sealed class DespachadorWebhooks
         {
             await RegistrarFalloAsync(entrega,
                 "El servidor del cliente no respondió dentro del plazo.", ct);
+        }
+        catch (HttpRequestException ex) when (DestinoBloqueadoException.Buscar(ex) is { } bloqueado)
+        {
+            // La URL resolvió a una IP interna. Como un 4xx: no se reintenta.
+            _log.LogWarning(
+                "Webhook {Tipo} bloqueado, no se envía: {Motivo}", entrega.Tipo, bloqueado.Message);
+
+            await _webhooks.RegistrarFalloAsync(
+                entrega.Id, MaximoIntentos, MaximoIntentos, null,
+                bloqueado.Message, TimeSpan.Zero, ct);
         }
         catch (HttpRequestException ex)
         {

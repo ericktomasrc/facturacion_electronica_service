@@ -1,4 +1,6 @@
+using System.Security.Cryptography;
 using Facturacion.Persistencia;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Facturacion.Api;
 
@@ -41,17 +43,46 @@ public static class EndpointsAdmin
                 return Results.BadRequest(new RespuestaError(
                     "Falta la razón social."));
 
+            // El identificador del portal es opcional al dar de alta.
+            nuevo.Identificador = Marca.LimpiarIdentificador(nuevo.Identificador);
+
+            if (Marca.ProblemaIdentificador(nuevo.Identificador) is { } problema)
+                return Results.BadRequest(new RespuestaError(
+                    "El identificador del portal no es válido.", problema));
+
+            // LA DIRECCIÓN, COMPLETA Y COHERENTE CON EL UBIGEO (diseño §13.4).
+            // El formulario ya no trae LIMA por defecto: lo que llega lo
+            // escribió alguien, y por eso queda como revisada.
+            var (dir, problemaDir) = Direccion.Revisar(
+                nuevo.Ubigeo, nuevo.Direccion, nuevo.Distrito, nuevo.Provincia, nuevo.Departamento);
+
+            if (dir is null)
+                return Results.BadRequest(new RespuestaError("La dirección no es válida.", problemaDir));
+
+            nuevo.Ubigeo = dir.Ubigeo;
+            nuevo.Direccion = dir.Direccion;
+            nuevo.Distrito = dir.Distrito;
+            nuevo.Provincia = dir.Provincia;
+            nuevo.Departamento = dir.Departamento;
+
             try
             {
                 var id = await admin.CrearTenantAsync(nuevo, ct);
                 return Results.Ok(new { id, mensaje = "Empresa creada." });
             }
+            catch (Npgsql.PostgresException ex) when (
+                ex.SqlState == "23505" && ex.ConstraintName == "ux_tenants_identificador")
+            {
+                return Results.Conflict(IdentificadorEnUso(nuevo.Identificador));
+            }
             catch (Npgsql.PostgresException ex) when (ex.SqlState == "23505")
             {
-                // Violación de unicidad: el RUC ya existe.
+                // Violación de unicidad: el RUC ya existe (ux_tenants_ruc_vigente,
+                // desde la 024: entre las empresas no abandonadas).
                 return Results.Conflict(new RespuestaError(
                     "Ese RUC ya está registrado.",
-                    "Cada empresa se da de alta una sola vez."));
+                    "Cada empresa se da de alta una sola vez. Si la creó la plataforma y " +
+                    "sale «sin confirmar», espera a que se confirme o se dé por abandonada."));
             }
         })
         .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasEditar))
@@ -61,8 +92,19 @@ public static class EndpointsAdmin
             Guid id, ActualizacionTenant cambios,
             RepositorioAdmin admin, CancellationToken ct) =>
         {
-            var actualizado = await admin.ActualizarTenantAsync(
-                id, cambios.Activo, cambios.MaxConcurrencia, ct);
+            bool actualizado;
+
+            try
+            {
+                actualizado = await admin.ActualizarTenantAsync(
+                    id, cambios.Activo, cambios.MaxConcurrencia, ct);
+            }
+            catch (Npgsql.PostgresException ex) when (ex.SqlState == "P0001")
+            {
+                // El disparador de la 024: un alta abandonada no se reactiva.
+                return Results.Conflict(new RespuestaError(
+                    "Esta empresa no se puede reactivar.", ex.MessageText));
+            }
 
             return actualizado
                 ? Results.Ok(new { mensaje = "Empresa actualizada." })
@@ -70,6 +112,136 @@ public static class EndpointsAdmin
         })
         .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasEditar))
         .WithSummary("Activa, desactiva o ajusta la concurrencia");
+
+        // --------------------------------------------------------------- marca
+
+        grupo.MapPut("/tenants/{id:guid}/marca", async (
+            Guid id, CambioMarca cambio,
+            RepositorioAdmin admin, CancellationToken ct) =>
+        {
+            var identificador = Marca.LimpiarIdentificador(cambio.Identificador);
+            var color = Marca.LimpiarColor(cambio.ColorMarca);
+            var correo = Marca.LimpiarCorreo(cambio.CorreoRespuesta);
+
+            if (Marca.ProblemaIdentificador(identificador) is { } pi)
+                return Results.BadRequest(new RespuestaError(
+                    "El identificador del portal no es válido.", pi));
+
+            if (Marca.ProblemaColor(color) is { } pc)
+                return Results.BadRequest(new RespuestaError("El color no es válido.", pc));
+
+            if (Marca.ProblemaCorreo(correo) is { } pr)
+                return Results.BadRequest(new RespuestaError(
+                    "El correo de respuesta no es válido.", pr));
+
+            try
+            {
+                var (resultado, actual) = await admin.GuardarMarcaAsync(
+                    id, identificador, color, correo, cambio.CopiaAlEmisor ?? false, ct);
+
+                return resultado switch
+                {
+                    ResultadoMarca.NoExiste =>
+                        Results.NotFound(new RespuestaError("No se encontró la empresa.")),
+
+                    ResultadoMarca.IdentificadorFijo =>
+                        Results.Conflict(new RespuestaError(
+                            "El identificador del portal no se puede cambiar.",
+                            $"Esta empresa ya es «{actual}». Es la dirección que va " +
+                            "en los correos ya enviados: cambiarla rompería esos " +
+                            "enlaces. No se guardó nada.")),
+
+                    _ => Results.Ok(new { mensaje = "Marca guardada.", identificador = actual })
+                };
+            }
+            catch (Npgsql.PostgresException ex) when (
+                ex.SqlState == "23505" && ex.ConstraintName == "ux_tenants_identificador")
+            {
+                return Results.Conflict(IdentificadorEnUso(identificador));
+            }
+        })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasEditar))
+        .WithSummary("Guarda el identificador del portal, el color y el correo de respuesta")
+        .WithDescription(
+            "Se mandan los tres campos cada vez. El color y el correo se " +
+            "reemplazan: vacío los quita. El identificador solo se puede poner " +
+            "una vez; si ya tiene uno y llega otro, responde 409 y no guarda " +
+            "nada.");
+
+        grupo.MapGet("/tenants/{id:guid}/logo", async (
+            Guid id, HttpContext contexto,
+            RepositorioAdmin admin, IAlmacenArchivos archivos, CancellationToken ct) =>
+        {
+            var logo = await admin.ObtenerLogoAsync(id, ct);
+
+            if (logo?.LogoRuta is not { } ruta)
+                return Results.NotFound(new RespuestaError("Esta empresa no tiene logo."));
+
+            var datos = await archivos.LeerAsync(ruta, ct);
+
+            if (datos is null || Marca.TipoDeImagen(datos) is not { } tipo)
+                return Results.NotFound(new RespuestaError(
+                    "No se encontró el archivo del logo en el almacén."));
+
+            // La dirección lleva ?v=<versión>, que cambia al subir otro logo.
+            // Por eso se puede guardar un día sin miedo a enseñar el viejo.
+            contexto.Response.Headers.CacheControl = "private, max-age=86400";
+            contexto.Response.Headers["X-Content-Type-Options"] = "nosniff";
+
+            return Results.File(datos, tipo.TipoMime);
+        })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasVer))
+        .WithSummary("El logo de la empresa, para verlo en el panel");
+
+        grupo.MapPost("/tenants/{id:guid}/logo", async (
+            Guid id, IFormFile archivo,
+            RepositorioAdmin admin, IAlmacenArchivos archivos, CancellationToken ct) =>
+        {
+            if (archivo.Length == 0)
+                return Results.BadRequest(new RespuestaError("El archivo está vacío."));
+
+            if (archivo.Length > Marca.LogoMaximoBytes)
+                return Results.BadRequest(new RespuestaError(
+                    "El logo es demasiado grande.",
+                    $"Pesa {archivo.Length / 1024} KB y el máximo es " +
+                    $"{Marca.LogoMaximoBytes / 1024} KB. Exporta una versión más " +
+                    "pequeña: en el PDF se imprime a 50 puntos de alto."));
+
+            using var memoria = new MemoryStream();
+            await archivo.CopyToAsync(memoria, ct);
+            var datos = memoria.ToArray();
+
+            if (Marca.TipoDeImagen(datos) is not { } tipo)
+                return Results.BadRequest(new RespuestaError(
+                    "El logo tiene que ser PNG o JPG.",
+                    "Se comprueba por el contenido del archivo, no por su nombre."));
+
+            if (Marca.ProblemaAlDibujar(datos) is { } problema)
+                return Results.BadRequest(new RespuestaError("No se puede usar ese logo.", problema));
+
+            var empresa = await admin.ObtenerLogoAsync(id, ct);
+
+            if (empresa is null)
+                return Results.NotFound(new RespuestaError("No se encontró la empresa."));
+
+            // El nombre sale del contenido: el mismo logo subido dos veces es
+            // el mismo archivo, y uno distinto nunca pisa al anterior.
+            var huella = Convert.ToHexString(SHA256.HashData(datos))[..16].ToLowerInvariant();
+
+            var ruta = await archivos.GuardarAsync(
+                empresa.Ruc, DateTime.UtcNow, $"logo-{huella}.{tipo.Extension}", datos, ct);
+
+            await admin.GuardarLogoAsync(id, ruta, ct);
+
+            return Results.Ok(new { mensaje = "Logo guardado. Ya sale en los PDF." });
+        })
+        .DisableAntiforgery()
+        .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasEditar))
+        .WithSummary("Sube el logo de la empresa")
+        .WithDescription(
+            "PNG o JPG, máximo 300 KB. Se comprueba que se puede dibujar antes " +
+            "de guardarlo. El anterior no se borra del almacén: solo deja de " +
+            "usarse.");
 
         // ------------------------------------------------- credenciales SOL
 
@@ -219,7 +391,14 @@ public static class EndpointsAdmin
         grupo.MapPost("/tenants/{id:guid}/certificado", async (
             Guid id,
             IFormFile archivo,
-            string clave,
+
+            // LA CONTRASEÑA VA EN EL CUERPO, NO EN LA DIRECCIÓN.
+            //
+            // Antes llegaba como ?clave=... y una dirección queda escrita en
+            // los registros de acceso del proxy, en los de cualquier
+            // intermediario y en las trazas de error. La contraseña de un
+            // certificado no puede acabar en un log.
+            [FromForm] string? clave,
             AlmacenCertificados certificados,
             CancellationToken ct) =>
         {
@@ -239,7 +418,7 @@ public static class EndpointsAdmin
             try
             {
                 var certificadoId = await certificados.GuardarAsync(
-                    id, memoria.ToArray(), clave, ct);
+                    id, memoria.ToArray(), clave ?? "", ct);
 
                 return Results.Ok(new
                 {
@@ -300,26 +479,148 @@ public static class EndpointsAdmin
             .WithSummary("Lista las series de una empresa");
 
         grupo.MapPost("/tenants/{id:guid}/series", async (
-            Guid id, NuevaSerie nueva,
+            Guid id, NuevaSerie nueva, ContextoOperador operador,
             RepositorioAdmin admin, CancellationToken ct) =>
         {
-            if (string.IsNullOrWhiteSpace(nueva.Serie) || nueva.Serie.Length != 4)
+            if (string.IsNullOrWhiteSpace(nueva.Serie) || nueva.Serie.Trim().Length != 4)
                 return Results.BadRequest(new RespuestaError(
                     "Serie inválida.",
                     "Debe tener 4 caracteres. Ej: F001 para facturas, B001 para boletas."));
 
-            var serieId = await admin.CrearSerieAsync(
-                id, nueva.TipoComprobante, nueva.Serie.ToUpperInvariant(),
-                nueva.CorrelativoInicial, ct);
+            if (nueva.CorrelativoInicial is < 0 or > CorrelativoMaximo)
+                return Results.BadRequest(new RespuestaError(
+                    "Correlativo inválido.",
+                    $"El último correlativo ya emitido va de 0 a {CorrelativoMaximo}. " +
+                    "Si la empresa nunca emitió con esta serie, es 0."));
 
-            return Results.Ok(new { id = serieId, mensaje = "Serie dada de alta." });
+            var serie = nueva.Serie.Trim().ToUpperInvariant();
+
+            // Validación 1: empezar en un número distinto de 0 es afirmar que
+            // la 1 a la N ya existen en SUNAT. Se pide que se confirme.
+            if (nueva.CorrelativoInicial > 0 && !nueva.Confirmado)
+                return Results.UnprocessableEntity(new
+                {
+                    error = $"Confirma que la {serie} empieza en la {nueva.CorrelativoInicial + 1}.",
+                    detalle =
+                        $"La primera que saldrá será {Numero(serie, nueva.CorrelativoInicial + 1)}. " +
+                        $"Eso quiere decir que de la 1 a la {nueva.CorrelativoInicial} ya se " +
+                        "emitieron en otro sistema. Si la empresa nunca emitió con esta serie, pon 0.",
+                    codigo = "confirmar_correlativo"
+                });
+
+            var usuario = operador.Exigir();
+
+            var alta = await admin.CrearSerieAsync(
+                id, nueva.TipoComprobante, serie,
+                nueva.CorrelativoInicial, usuario.Id, usuario.Correo, ct);
+
+            // Validación 2: la serie ya existe. NO se crea otra ni se toca la
+            // que hay: se dice dónde va y qué se puede hacer.
+            if (alta.Existente is { } e)
+            {
+                var pide = nueva.CorrelativoInicial;
+                var queHacer = pide > e.UltimoCorrelativo
+                    ? $"Si fuera de aquí llegó hasta la {pide}, usa «Ajustar correlativo» " +
+                      $"en esa serie: la siguiente saldrá {Numero(serie, pide + 1)}."
+                    : "No se puede bajar el correlativo: volvería a dar números que ya existen.";
+
+                if (!e.Activo)
+                    queHacer += " Está cerrada: para volver a emitir con ella, reactívala.";
+
+                return Results.Conflict(new
+                {
+                    error = $"La serie {serie} ya existe. No se creó otra.",
+                    detalle =
+                        $"Va en la {e.UltimoCorrelativo} (la siguiente sería " +
+                        $"{Numero(serie, e.UltimoCorrelativo + 1)}), " +
+                        $"{(e.Activo ? "activa" : "cerrada")}, con {e.Comprobantes} " +
+                        $"comprobante(s) emitido(s) aquí. {queHacer}",
+                    codigo = "serie_existente",
+                    serie = new
+                    {
+                        id = e.Id,
+                        nombre = serie,
+                        ultimoCorrelativo = e.UltimoCorrelativo,
+                        activo = e.Activo,
+                        comprobantes = e.Comprobantes
+                    }
+                });
+            }
+
+            return Results.Ok(new
+            {
+                id = alta.Id,
+                mensaje = nueva.CorrelativoInicial > 0
+                    ? $"Serie dada de alta. La primera saldrá " +
+                      $"{Numero(serie, nueva.CorrelativoInicial + 1)}; queda anotado en la bitácora."
+                    : $"Serie dada de alta. La primera saldrá {Numero(serie, 1)}."
+            });
         })
         .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasEditar))
         .WithSummary("Da de alta una serie")
         .WithDescription(
             "El correlativo inicial normalmente es 0, pero si la empresa migra " +
             "desde otro sistema hay que poner el último número que ya emitió. " +
-            "Empezar de nuevo en 1 generaría duplicados que SUNAT rechaza.");
+            "Empezar de nuevo en 1 generaría duplicados que SUNAT rechaza. " +
+            "Si no es 0 hay que mandar confirmado = true (si no, 422). " +
+            "Si la serie ya existe devuelve 409 con dónde va: no crea otra ni la toca.");
+
+        grupo.MapPut("/tenants/{id:guid}/series/{serieId:guid}/correlativo", async (
+            Guid id, Guid serieId, AjusteCorrelativo ajuste, ContextoOperador operador,
+            RepositorioAdmin admin, CancellationToken ct) =>
+        {
+            var motivo = ajuste.Motivo?.Trim() ?? "";
+
+            if (ProblemaMotivo(motivo) is { } problema)
+                return Results.BadRequest(new RespuestaError(
+                    "El motivo no sirve así.",
+                    problema + " Ej: «Emitió fuera de aquí hasta la 780 mientras no " +
+                    "estuvo con nosotros»."));
+
+            if (ajuste.Hasta is < 1 or > CorrelativoMaximo)
+                return Results.BadRequest(new RespuestaError(
+                    "Correlativo inválido.",
+                    $"Va de 1 a {CorrelativoMaximo}: el último número que ya existe en SUNAT."));
+
+            var usuario = operador.Exigir();
+
+            var r = await admin.AjustarCorrelativoAsync(
+                id, serieId, ajuste.Hasta, motivo, usuario.Id, usuario.Correo, ct);
+
+            return r.Resultado switch
+            {
+                ResultadoAjuste.NoExiste =>
+                    Results.NotFound(new RespuestaError("No se encontró la serie.")),
+
+                ResultadoAjuste.NoSube => Results.Conflict(new RespuestaError(
+                    "Solo se puede subir.",
+                    $"La {r.Serie} ya va en la {r.Desde}. Bajarlo volvería a dar " +
+                    "números que ya existen en SUNAT, y los rechazaría por repetidos. " +
+                    "Si se creó en un número equivocado, ese hueco ya no se corrige: " +
+                    "avísale al contador.")),
+
+                _ => Results.Ok(new
+                {
+                    mensaje =
+                        $"La {r.Serie} pasó de la {r.Desde} a la {r.Hasta}. La siguiente " +
+                        $"saldrá {Numero(r.Serie, r.Hasta + 1)}. Queda anotado en la bitácora.",
+                    desde = r.Desde,
+                    hasta = r.Hasta
+                })
+            };
+        })
+        .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasEditar))
+        .WithSummary("Sube el último correlativo de una serie")
+        .WithDescription(
+            "Solo hacia arriba, con motivo, y queda en la bitácora de correlativos " +
+            "(quién, cuándo, de cuánto a cuánto). Para el cliente que siguió " +
+            "emitiendo con la misma serie en otro sistema.");
+
+        grupo.MapGet("/tenants/{id:guid}/series/ajustes", async (
+            Guid id, RepositorioAdmin admin, CancellationToken ct) =>
+            Results.Ok(await admin.ListarAjustesSerieAsync(id, ct)))
+            .AddEndpointFilter(new ExigirPermiso(Permiso.EmpresasVer))
+            .WithSummary("Bitácora de correlativos de una empresa");
 
         grupo.MapDelete("/tenants/{id:guid}/series/{serieId:guid}", async (
             Guid id, Guid serieId, RepositorioAdmin admin, CancellationToken ct) =>
@@ -406,14 +707,63 @@ public static class EndpointsAdmin
             "quién tuvo acceso y hasta cuándo, que es justo lo que hay que " +
             "poder responder después de un incidente.");
     }
+
+    /// <summary>SUNAT numera con 8 dígitos: el último posible es 99999999.</summary>
+    private const int CorrelativoMaximo = 99_999_999;
+
+    /// <summary>
+    /// El motivo de un ajuste es OBLIGATORIO y tiene que decir algo: mínimo
+    /// 10 letras y 2 palabras, máximo 500 caracteres. «asdasd» no explica
+    /// nada el día que haya que saber por qué se saltaron 180 números.
+    /// La pantalla aplica la misma regla; esta es la que manda.
+    /// </summary>
+    internal static string? ProblemaMotivo(string motivo)
+    {
+        if (motivo.Length == 0) return "El motivo es obligatorio.";
+        if (motivo.Length > 500) return "Máximo 500 caracteres.";
+
+        var letras = motivo.Count(char.IsLetter);
+        var palabras = motivo
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Count(p => p.Count(char.IsLetter) >= 2);
+
+        if (letras < 10 || palabras < 2)
+            return "Explica el porqué con al menos 2 palabras y 10 letras.";
+
+        return null;
+    }
+
+    private static string Numero(string serie, int correlativo) =>
+        $"{serie}-{correlativo:D8}";
+
+    private static RespuestaError IdentificadorEnUso(string? identificador) =>
+        new("Ese identificador ya lo usa otra empresa.",
+            $"«{identificador}» está tomado. Prueba con el nombre comercial y la " +
+            "ciudad, por ejemplo ferreteria-lopez-arequipa.");
 }
 
 public record ActualizacionTenant(bool? Activo, short? MaxConcurrencia);
 
+/// <param name="CopiaAlEmisor">
+/// Migración 026: copia oculta de cada correo de comprobante al correo de
+/// respuesta. Opcional; si no viene, queda desactivada.
+/// </param>
+public record CambioMarca(
+    string? Identificador, string? ColorMarca, string? CorreoRespuesta, bool? CopiaAlEmisor = null);
+
+/// <param name="Confirmado">
+/// Obligatorio si CorrelativoInicial no es 0: confirma que de la 1 a ese
+/// número ya se emitieron en otro sistema.
+/// </param>
 public record NuevaSerie(
     string TipoComprobante,
     string Serie,
-    int CorrelativoInicial = 0);
+    int CorrelativoInicial = 0,
+    bool Confirmado = false);
+
+/// <param name="Hasta">El último correlativo que ya existe en SUNAT. Tiene que ser mayor que el actual.</param>
+/// <param name="Motivo">Por qué se ajusta. Queda en la bitácora.</param>
+public record AjusteCorrelativo(int Hasta, string? Motivo);
 
 public record NuevaClave(string Nombre, bool Produccion = false);
 
