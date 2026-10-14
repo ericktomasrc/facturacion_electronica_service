@@ -121,6 +121,7 @@ public sealed class ServicioCorreosEntrega : BackgroundService
         }
 
         var pdf = await PdfAdjuntoAsync(p, d, ct);
+        var xmlYCdr = await XmlYCdrAsync(p, d, ct);
         var logo = await LogoAsync(d, ct);
 
         var acceso = AccesoPortal.Nuevo();
@@ -129,14 +130,15 @@ public sealed class ServicioCorreosEntrega : BackgroundService
 
         var enlace = $"{_opciones.UrlPortalEfectiva}/{d.Identificador}/e/{acceso}";
 
-        var (asunto, html, texto) = PlantillaEntrega.Armar(d, enlace, pdf is not null, logo is not null);
+        var (asunto, html, texto) = PlantillaEntrega.Armar(d, enlace, pdf is not null, logo is not null, xmlYCdr.Count > 0);
 
         // LA COPIA AL EMISOR (migración 026): solo si la pidió, a su correo de
         // respuesta, y oculta. Lleva el mismo enlace que el del receptor: es su
         // propio comprobante, y así ve exactamente lo que recibió su cliente.
         var error = await _correo.EnviarEntregaAsync(
             p.Para, d.NombreEmisor, d.CorreoRespuesta!, asunto, html, texto, pdf, logo, ct,
-            copiaOculta: d.CopiaAlEmisor ? d.CorreoRespuesta : null);
+            copiaOculta: d.CopiaAlEmisor ? d.CorreoRespuesta : null,
+            otrosAdjuntos: xmlYCdr);
 
         if (error is null)
         {
@@ -175,6 +177,46 @@ public sealed class ServicioCorreosEntrega : BackgroundService
                 d.Numero);
             return null;
         }
+    }
+
+    /// <summary>
+    /// El XML firmado y el CDR de SUNAT, adjuntos (fase 4c). Solo en facturas
+    /// y notas: la boleta no tiene CDR propio (va en el resumen diario) y quien
+    /// la recibe no suele pedir el XML. Si algo falla o pesa más de 1 MB, no
+    /// va: el correo sale igual, con el enlace.
+    /// </summary>
+    private async Task<List<AdjuntoCorreo>> XmlYCdrAsync(
+        CorreoPendiente p, DatosCorreoPortal d, CancellationToken ct)
+    {
+        var lista = new List<AdjuntoCorreo>();
+        if (d.TipoComprobante == "03") return lista;
+
+        try
+        {
+            var rutas = await _comprobantes.ObtenerRutasAsync(p.TenantId, p.ComprobanteId, ct);
+            if (rutas is null) return lista;
+
+            foreach (var (ruta, extension, mime) in new[]
+                     {
+                         (rutas.RutaXml, "xml", "application/xml"),
+                         (rutas.RutaCdr, "zip", "application/zip")
+                     })
+            {
+                if (string.IsNullOrWhiteSpace(ruta)) continue;
+                var bytes = await _archivos.LeerAsync(ruta, ct);
+                if (bytes is { Length: > 0 } && bytes.Length <= TopeAdjunto)
+                    lista.Add(new AdjuntoCorreo(
+                        extension == "zip" ? "R-" + rutas.NombreDescarga(extension) : rutas.NombreDescarga(extension),
+                        mime, bytes));
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning(ex, "No se pudieron adjuntar el XML y el CDR de {Numero}; va solo el enlace.", d.Numero);
+            lista.Clear();
+        }
+
+        return lista;
     }
 
     private async Task<AdjuntoCorreo?> LogoAsync(DatosCorreoPortal d, CancellationToken ct)
@@ -254,7 +296,7 @@ public static class PlantillaEntrega
     }
 
     public static (string Asunto, string Html, string Texto) Armar(
-        DatosCorreoPortal d, string enlace, bool conPdf, bool conLogo)
+        DatosCorreoPortal d, string enlace, bool conPdf, bool conLogo, bool conXmlCdr = false)
     {
         static string E(string? t) => WebUtility.HtmlEncode(t ?? "");
 
@@ -268,9 +310,13 @@ public static class PlantillaEntrega
 
         var asunto = $"{TipoCorto(d.TipoComprobante)} {d.Numero} de {nombre}";
 
-        var notaPdf = conPdf
-            ? "Adjuntamos el PDF del comprobante."
-            : "El PDF no va adjunto: descárgalo desde el botón.";
+        var notaPdf = (conPdf, conXmlCdr) switch
+        {
+            (true, true)  => "Adjuntamos el PDF, el XML y la constancia de SUNAT (CDR).",
+            (true, false) => "Adjuntamos el PDF del comprobante.",
+            (false, true) => "Adjuntamos el XML y la constancia de SUNAT (CDR). El PDF descárgalo desde el botón.",
+            _             => "El PDF no va adjunto: descárgalo desde el botón.",
+        };
 
         var archivos = esBoleta ? "el PDF" : "el PDF, el XML y el CDR de SUNAT";
 

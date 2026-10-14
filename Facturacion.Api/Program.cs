@@ -3,7 +3,7 @@ using System.Text.Json;
 using Facturacion.Api;
 using Facturacion.Cpe;
 using Facturacion.Persistencia;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 
 // Los secretos se leen del entorno, no de appsettings.json.
 //
@@ -169,58 +169,58 @@ builder.Services.ConfigureHttpJsonOptions(opciones =>
 
 builder.Services.AddEndpointsApiExplorer();
 
-builder.Services.AddSwaggerGen(opciones =>
+// .NET 10 (13 de octubre de 2026): el documento lo genera Microsoft
+// (Microsoft.AspNetCore.OpenApi), como en la plataforma. De Swashbuckle solo
+// queda el visor. Mismo título, misma descripción y el mismo esquema ApiKey.
+builder.Services.AddOpenApi(opciones =>
 {
-    opciones.SwaggerDoc("v1", new OpenApiInfo
+    opciones.AddDocumentTransformer((documento, _, _) =>
     {
-        Title = "Servicio de facturación electrónica",
-        Version = "v1",
-        Description =
-            "Emisión de comprobantes electrónicos para SUNAT.\n\n" +
-            "Toda petición requiere una clave de acceso.\n\n" +
-            "**Emisión y consulta** (`/v1/*`): la clave determina qué empresa " +
-            "emite, así que el RUC del emisor NO se envía en el cuerpo. " +
-            "En Authorize, campo `ApiKey`, escribe `Bearer` seguido de la " +
-            "clave que se le entregó a esa empresa.\n\n" +
-            "**Administración** (`/admin/*`): se entra con usuario y " +
-            "contraseña desde el panel, y la sesión viaja en una cookie.\n\n" +
-            "Ninguna clave aparece en esta documentación a propósito: si " +
-            "estuviera aquí, estaría también en el repositorio."
-    });
-
-    // DOS ESQUEMAS DE AUTENTICACIÓN, Y ES A PROPÓSITO.
-    //
-    // Los emisores usan su clave en Authorization: Bearer. El panel usa
-    // sesión con cookie, que el navegador envía sola.
-    //
-    // Declarar el primero en Swagger no es un detalle cosmético: sin él,
-    // probar la API obligaría a escribir comandos a mano, y eso hace que se
-    // pruebe menos.
-
-    opciones.AddSecurityDefinition("ApiKey", new OpenApiSecurityScheme
-    {
-        Name = "Authorization",
-        Type = SecuritySchemeType.ApiKey,
-        In = ParameterLocation.Header,
-        Description =
-            "Clave del EMISOR. Escribe: Bearer {tu clave}\n\n" +
-            "Sirve para /v1/*: emitir comprobantes, guías y consultarlos.",
-        Scheme = "Bearer"
-    });
-
-    opciones.AddSecurityRequirement(new OpenApiSecurityRequirement
-    {
+        documento.Info = new OpenApiInfo
         {
-            new OpenApiSecurityScheme
-            {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "ApiKey"
-                }
-            },
-            Array.Empty<string>()
-        }
+            Title = "Servicio de facturación electrónica",
+            Version = "v1",
+            Description =
+                "Emisión de comprobantes electrónicos para SUNAT.\n\n" +
+                "Toda petición requiere una clave de acceso.\n\n" +
+                "**Emisión y consulta** (`/v1/*`): la clave determina qué empresa " +
+                "emite, así que el RUC del emisor NO se envía en el cuerpo. " +
+                "En Authorize, campo `ApiKey`, escribe `Bearer` seguido de la " +
+                "clave que se le entregó a esa empresa.\n\n" +
+                "**Administración** (`/admin/*`): se entra con usuario y " +
+                "contraseña desde el panel, y la sesión viaja en una cookie.\n\n" +
+                "Ninguna clave aparece en esta documentación a propósito: si " +
+                "estuviera aquí, estaría también en el repositorio."
+        };
+
+        // DOS ESQUEMAS DE AUTENTICACIÓN, Y ES A PROPÓSITO.
+        //
+        // Los emisores usan su clave en Authorization: Bearer. El panel usa
+        // sesión con cookie, que el navegador envía sola.
+        //
+        // Declarar el primero no es un detalle cosmético: sin él, probar la
+        // API obligaría a escribir comandos a mano, y eso hace que se pruebe
+        // menos.
+        documento.Components ??= new OpenApiComponents();
+        documento.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
+        documento.Components.SecuritySchemes["ApiKey"] = new OpenApiSecurityScheme
+        {
+            Name = "Authorization",
+            Type = SecuritySchemeType.ApiKey,
+            In = ParameterLocation.Header,
+            Description =
+                "Clave del EMISOR. Escribe: Bearer {tu clave}\n\n" +
+                "Sirve para /v1/*: emitir comprobantes, guías y consultarlos.",
+            Scheme = "Bearer"
+        };
+
+        documento.Security ??= new List<OpenApiSecurityRequirement>();
+        documento.Security.Add(new OpenApiSecurityRequirement
+        {
+            [new OpenApiSecuritySchemeReference("ApiKey", documento)] = new List<string>()
+        });
+
+        return Task.CompletedTask;
     });
 });
 
@@ -240,11 +240,11 @@ if (app.Services.GetRequiredService<IAlmacenArchivos>() is AlmacenArchivosS3 alm
 
 if (app.Environment.IsDevelopment())
 {
-    app.UseSwagger();
+    app.MapOpenApi();          // /openapi/v1.json
 
     app.UseSwaggerUI(opciones =>
     {
-        opciones.SwaggerEndpoint("/swagger/v1/swagger.json", "Facturación v1");
+        opciones.SwaggerEndpoint("/openapi/v1.json", "Facturación v1");
 
         opciones.RoutePrefix = "docs";
         opciones.DocumentTitle = "Facturación electrónica";
@@ -312,6 +312,7 @@ app.MapearAdministracion();
 app.MapearWebhooks();
 app.MapearWebhookApi();
 app.MapearAlta();
+app.MapearConfiguracion();
 app.MapearConsultas();
 app.MapearNotas();
 app.MapearDescargas();

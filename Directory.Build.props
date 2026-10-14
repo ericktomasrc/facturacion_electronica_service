@@ -68,4 +68,16 @@
             con null. Mismo espíritu que CS0472.
   -->
 
+  <!-- VERSIONES QUE NO SE MUEVEN SOLAS (13 de octubre de 2026).
+
+       Con esto, cada proyecto tiene su packages.lock.json con la versión
+       EXACTA de cada paquete, también de los que llegan de rebote. El mismo
+       código trae siempre los mismos paquetes, y el día que algo falle se
+       sabe qué versión se usó. Los packages.lock.json van a git.
+
+       Para subir un paquete: cambia su versión en el .csproj y compila; el
+       archivo de bloqueo se actualiza y el cambio queda a la vista en git. -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
 </Project>

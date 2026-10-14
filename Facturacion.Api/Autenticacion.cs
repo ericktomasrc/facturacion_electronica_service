@@ -101,6 +101,22 @@ public sealed class AutenticacionApiKey
 
         emisor.Establecer(tenant, clave);
 
+        // FASE 4c (migración 028): un emisor en pausa solo puede LEER. Todo lo
+        // que no sea GET responde 423, salvo la ruta que quita la pausa.
+        if (!HttpMethods.IsGet(contexto.Request.Method) &&
+            !HttpMethods.IsHead(contexto.Request.Method) &&
+            !contexto.Request.Path.StartsWithSegments("/v1/configuracion/pausa"))
+        {
+            var admin = contexto.RequestServices.GetRequiredService<RepositorioAdmin>();
+            if (await admin.EmisionPausadaAsync(tenant.Id, contexto.RequestAborted))
+            {
+                await Responder(contexto, StatusCodes.Status423Locked,
+                    "Esta empresa está en pausa: no puede emitir.",
+                    "Consultar y descargar siguen funcionando. La pausa la quita el titular al recuperar su empresa.");
+                return;
+            }
+        }
+
         await _siguiente(contexto);
     }
 

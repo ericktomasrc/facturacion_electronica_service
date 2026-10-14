@@ -163,7 +163,8 @@ public sealed class ServicioCorreo
         string asunto, string html, string texto,
         AdjuntoCorreo? adjunto, AdjuntoCorreo? logo,
         CancellationToken ct = default,
-        string? copiaOculta = null)
+        string? copiaOculta = null,
+        IReadOnlyList<AdjuntoCorreo>? otrosAdjuntos = null)
     {
         if (!Disponible)
             return "El correo no está configurado (MAIL_HOST, MAIL_DESDE).";
@@ -201,6 +202,10 @@ public sealed class ServicioCorreo
             if (adjunto is not null)
                 cuerpo.Attachments.Add(
                     adjunto.Nombre, adjunto.Datos, ContentType.Parse(adjunto.TipoMime));
+
+            // El XML y el CDR (fase 4c), detrás del PDF.
+            foreach (var otro in otrosAdjuntos ?? [])
+                cuerpo.Attachments.Add(otro.Nombre, otro.Datos, ContentType.Parse(otro.TipoMime));
 
             mensaje.Body = cuerpo.ToMessageBody();
 

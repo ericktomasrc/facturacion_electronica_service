@@ -119,3 +119,5 @@ docker-compose.override.yml
 
 launchSettings.json
 almacen/
+# Copias que dejan los scripts de entrega
+*.bak

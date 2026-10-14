@@ -450,6 +450,32 @@ public sealed class RepositorioAdmin
     /// declarar, pagar, modificar datos. Ese nivel de acceso no tiene por
     /// qué vivir en la base de datos de un proveedor.
     /// </summary>
+    /// <summary>
+    /// Fase 4c (migración 028): pausa o reactiva la emisión de un emisor. Con
+    /// la pausa, su clave fac_ solo puede leer.
+    /// </summary>
+    public async Task PausarEmisionAsync(Guid tenantId, bool pausar, string? motivo, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+        await conexion.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE tenants
+               SET emision_pausada_en = CASE WHEN @pausar THEN COALESCE(emision_pausada_en, now()) END,
+                   motivo_pausa       = CASE WHEN @pausar THEN @motivo END
+             WHERE id = @tenantId
+            """,
+            new { tenantId, pausar, motivo }, cancellationToken: ct));
+    }
+
+    /// <summary>¿Está en pausa la emisión de este emisor? (fase 4c)</summary>
+    public async Task<bool> EmisionPausadaAsync(Guid tenantId, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+        return await conexion.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT emision_pausada_en IS NOT NULL FROM tenants WHERE id = @tenantId",
+            new { tenantId }, cancellationToken: ct));
+    }
+
     public async Task<bool> GuardarCredencialesSolAsync(
         Guid tenantId, string usuario, string clave,
         IProtectorDeSecretos protector, CancellationToken ct = default)
@@ -604,6 +630,10 @@ public sealed class RepositorioAdmin
     /// obligaría a resolverlo con la administración tributaria. Si no es cero,
     /// queda anotado en la bitácora (serie_ajustes, acción «alta»).
     ///
+    /// usuarioId NULO = no lo hizo una persona del panel sino la configuración
+    /// desde la plataforma (/v1/configuracion/series). Entonces «correo» dice
+    /// quién fue allí, con el prefijo «plataforma:».
+    ///
     /// SI LA SERIE YA EXISTE, NO HACE NADA y devuelve la que existe. Antes la
     /// reactivaba en silencio y pasaba por alto el correlativo nuevo, así que
     /// el operador creía haber puesto la 780 y la serie seguía en la 600. Ahora
@@ -611,7 +641,7 @@ public sealed class RepositorioAdmin
     /// </summary>
     public async Task<AltaSerie> CrearSerieAsync(
         Guid tenantId, string tipoComprobante, string serie,
-        int correlativoInicial, Guid usuarioId, string correo,
+        int correlativoInicial, Guid? usuarioId, string correo,
         CancellationToken ct = default)
     {
         await using var conexion = await AbrirAsync(ct);
@@ -759,7 +789,7 @@ public sealed class RepositorioAdmin
         NpgsqlConnection conexion, NpgsqlTransaction tx,
         Guid tenantId, Guid serieId, string tipoComprobante, string serie,
         string accion, int desde, int hasta, string motivo,
-        Guid usuarioId, string correo, CancellationToken ct) =>
+        Guid? usuarioId, string correo, CancellationToken ct) =>
         conexion.ExecuteAsync(new CommandDefinition(
             """
             INSERT INTO serie_ajustes
