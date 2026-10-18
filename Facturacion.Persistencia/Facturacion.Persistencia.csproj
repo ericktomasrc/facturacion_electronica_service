@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\Facturacion.Cpe\Facturacion.Cpe.csproj" />
@@ -8,7 +8,10 @@
     <PackageReference Include="AWSSDK.S3" Version="3.7.405.9" />
     <PackageReference Include="Dapper" Version="2.1.86" />
     <PackageReference Include="MailKit" Version="4.18.1" />
-    <PackageReference Include="Npgsql" Version="10.0.3" />
+    <!-- Npgsql 8, A PROPÓSITO (14 oct 2026): desde la 10, las columnas `date`
+         se leen como DateOnly y los records que llena Dapper esperan DateTime.
+         Subirlo exige revisar esos records antes. Ver migracion-net10.md. -->
+    <PackageReference Include="Npgsql" Version="8.0.7" />
   </ItemGroup>
 
   <PropertyGroup>

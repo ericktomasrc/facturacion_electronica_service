@@ -1,0 +1,202 @@
+# =============================================================================
+# PRODUCCIÓN — el servicio de facturación y la plataforma, en un solo servidor
+#
+#   docker compose -f docker-compose.produccion.yml up -d
+#
+# Lo explica paso a paso GUIA-DESPLIEGUE.md. Lo esencial:
+#
+#   - Los únicos puertos abiertos al exterior son 80 y 443, y son de Caddy.
+#     Las bases, el almacén y las API viven solo en la red interna.
+#   - Las migraciones NO se aplican al arrancar: se corren a mano con
+#     ./migrar.sh (un contenedor que se reinicia no debe migrar en cada vuelta).
+#   - Los secretos están en .env, .env.servicio y .env.plataforma, junto a este
+#     archivo, y NUNCA entran en git (despliegue/.gitignore) ni en una imagen.
+#   - Las rutas de los repositorios son las mismas que en el equipo de
+#     desarrollo (ver RUTA_PLATAFORMA en .env).
+# =============================================================================
+
+name: reyban
+
+x-registro: &registro
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"     # sin esto los logs llenan el disco en unos meses
+      max-file: "5"
+
+services:
+
+  # --------------------------------------------------------------- bases
+  db-facturacion:
+    image: postgres:16-alpine
+    <<: *registro
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: facturacion_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_FACTURACION:?falta en .env}
+      POSTGRES_DB: facturacion
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - datos_facturacion:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U facturacion_owner -d facturacion"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [interna]
+    mem_limit: 1g
+
+  db-plataforma:
+    image: postgres:16-alpine
+    <<: *registro
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_PLATAFORMA:?falta en .env}
+      POSTGRES_DB: plataforma
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - datos_plataforma:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d plataforma"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [interna]
+    mem_limit: 768m
+
+  # ------------------------------------------------------------- almacén
+  # MinIO, igual que en desarrollo. Si se elige Cloudflare R2 (recomendado en
+  # despliegue-pendientes.md §9), se quita este servicio y se cambian las
+  # variables del almacén en .env.servicio.
+  almacen:
+    image: ${IMAGEN_MINIO:-quay.io/minio/minio:latest}   # mejor fijar una versión probada en .env
+    <<: *registro
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?falta en .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?falta en .env}
+    volumes:
+      - datos_almacen:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]   # la imagen ya no trae curl
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks: [interna]
+    mem_limit: 512m
+
+  # Crea el bucket (con versionado: si alguien sobrescribe un CDR, la versión
+  # anterior sigue ahí) y termina. La API no lo crea: solo comprueba que existe.
+  almacen-inicial:
+    image: ${IMAGEN_MC:-quay.io/minio/mc:latest}
+    <<: *registro
+    depends_on:
+      almacen: { condition: service_healthy }
+    environment:
+      # Las credenciales por variable, no en la línea de órdenes.
+      MC_HOST_local: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@almacen:9000
+    entrypoint: >
+      /bin/sh -c "
+      mc mb --ignore-existing local/comprobantes &&
+      mc version enable local/comprobantes &&
+      echo 'Bucket listo con versionado.'
+      "
+    networks: [interna]
+
+  # ----------------------------------------------- servicio de facturación
+  facturacion-api:
+    build:
+      context: ..
+      dockerfile: despliegue/servicio.Dockerfile
+      target: api
+    image: reyban/facturacion-api:local
+    <<: *registro
+    restart: unless-stopped
+    env_file: [.env.servicio]
+    environment:
+      PROXY_IP_CONFIABLE: 172.30.0.10      # Caddy (ver «interna» abajo)
+    depends_on:
+      db-facturacion:  { condition: service_healthy }
+      almacen-inicial: { condition: service_completed_successfully }
+    networks: [interna]
+    mem_limit: 1g
+
+  # UNA SOLA COPIA, siempre: dos workers sobre la misma cola pueden enviar el
+  # mismo comprobante dos veces a SUNAT.
+  facturacion-worker:
+    build:
+      context: ..
+      dockerfile: despliegue/servicio.Dockerfile
+      target: worker
+    image: reyban/facturacion-worker:local
+    <<: *registro
+    restart: unless-stopped
+    env_file: [.env.servicio]
+    depends_on:
+      db-facturacion:  { condition: service_healthy }
+      almacen-inicial: { condition: service_completed_successfully }
+    networks: [interna]
+    mem_limit: 1g
+
+  # ------------------------------------------------------------ plataforma
+  # La API sirve también el front (wwwroot + MapFallbackToFile).
+  plataforma:
+    build:
+      context: ${RUTA_PLATAFORMA:-../../../reyban_plataforma}
+      dockerfile: ${RUTA_KIT_DESDE_PLATAFORMA:-../facturacion electronica/facturacion_electronica_service/despliegue}/plataforma.Dockerfile
+    image: reyban/plataforma:local
+    <<: *registro
+    restart: unless-stopped
+    env_file: [.env.plataforma]
+    environment:
+      PROXY_IP_CONFIABLE: 172.30.0.10
+    depends_on:
+      db-plataforma:   { condition: service_healthy }
+      facturacion-api: { condition: service_started }
+    networks: [interna]
+    mem_limit: 768m
+
+  # ----------------------------------------------------------------- Caddy
+  # Pide y renueva el certificado TLS solo. Los dominios vienen de .env.
+  caddy:
+    image: caddy:2.8-alpine
+    <<: *registro
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMINIO_SERVICIO:   ${DOMINIO_SERVICIO:?falta en .env}
+      DOMINIO_PORTAL:     ${DOMINIO_PORTAL:?falta en .env}
+      DOMINIO_PLATAFORMA: ${DOMINIO_PLATAFORMA:?falta en .env}
+      CORREO_TLS:         ${CORREO_TLS:?falta en .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - datos_caddy:/data
+      - config_caddy:/config
+    depends_on:
+      - facturacion-api
+      - plataforma
+    networks:
+      interna:
+        ipv4_address: 172.30.0.10        # fija: las API solo creen X-Forwarded-For de aquí
+    mem_limit: 256m
+
+networks:
+  interna:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          ip_range: 172.30.0.128/25    # las automáticas no llegan nunca a la .10 de Caddy
+
+volumes:
+  datos_facturacion:
+  datos_plataforma:
+  datos_almacen:
+  datos_caddy:
+  config_caddy:

@@ -472,6 +472,21 @@ public class LineaDto
 {
     public string CodigoProducto { get; set; } = "";
 
+    /// <summary>
+    /// Código de producto SUNAT: 8 dígitos del catálogo 25 (UNSPSC v14), por
+    /// ejemplo 50161509 «Azúcares naturales». NO es tu código propio, que va en
+    /// codigoProducto.
+    ///
+    /// Opcional en factura, boleta y notas, pero si lo mandas tiene que ser
+    /// válido: desde el 1 de enero de 2027 uno inválido hace rechazar el
+    /// comprobante (regla 3496). Mínimo nivel clase: 50161500 vale, 50160000
+    /// no.
+    ///
+    /// En la LIQUIDACIÓN DE COMPRA es obligatorio desde el 1 de enero de 2027
+    /// (regla 3506).
+    /// </summary>
+    public string? CodigoProductoSunat { get; set; }
+
     [Required]
     public string Descripcion { get; set; } = "";
 

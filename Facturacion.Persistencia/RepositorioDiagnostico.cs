@@ -137,6 +137,8 @@ public sealed class RepositorioDiagnostico
                           AND actualizado_en >= current_date
                     )::int AS "RechazadosHoy"
                 FROM comprobantes
+                -- La empresa de control (prueba de madrugada) no cuenta.
+                WHERE tenant_id NOT IN (SELECT id FROM tenants WHERE ruc = '20999999990')
                 """,
                 cancellationToken: ct));
 
@@ -152,6 +154,7 @@ public sealed class RepositorioDiagnostico
                 SELECT max(creado_en)
                   FROM envio_intentos
                  WHERE estado_nuevo IN ('ACEPTADO','ACEPTADO_CON_OBSERVACIONES')
+                   AND tenant_id NOT IN (SELECT id FROM tenants WHERE ruc = '20999999990')
                 """,
                 cancellationToken: ct));
 
@@ -167,6 +170,7 @@ public sealed class RepositorioDiagnostico
                    AND codigo_sunat IS NOT NULL
                    AND codigo_sunat <> '0'
                    AND creado_en >= now() - interval '24 hours'
+                   AND tenant_id NOT IN (SELECT id FROM tenants WHERE ruc = '20999999990')
                  GROUP BY codigo_sunat
                  ORDER BY count(*) DESC
                  LIMIT 10
@@ -203,6 +207,7 @@ public sealed class RepositorioDiagnostico
                   FROM comprobantes c
                   JOIN tenants t ON t.id = c.tenant_id
                  WHERE c.intentos_fallidos > 0
+                   AND t.ruc <> '20999999990'
                    AND c.estado IN ('BORRADOR','ENCOLADO','RECHAZADO')
                  ORDER BY c.intentos_fallidos DESC, c.creado_en
                  LIMIT 20
@@ -215,6 +220,12 @@ public sealed class RepositorioDiagnostico
 
         var (nivel, alertas) = Evaluar(
             contadores, certificados, minutosDesdeExito);
+
+        // VIGILANCIA SUNAT (migración 029): un código de SUNAT nunca visto,
+        // que nadie revisó todavía, sube el semáforo. Es la primera señal de
+        // que SUNAT cambió una regla.
+        await SumarVigilanciaAsync(conexion, alertas,
+            propuesto => { if (propuesto > nivel) nivel = propuesto; }, ct);
 
         return new SaludSistema(
             nivel, alertas,
@@ -352,6 +363,62 @@ public sealed class RepositorioDiagnostico
 
         return filas > 0;
     }
+
+    /// <summary>
+    /// Los códigos de SUNAT nunca vistos y sin revisar (Vigilancia SUNAT).
+    ///
+    /// Si la migración 029 no está aplicada, no dice nada: el diagnóstico
+    /// tiene que seguir funcionando aunque la vigilancia no exista todavía.
+    /// </summary>
+    private static async Task SumarVigilanciaAsync(
+        NpgsqlConnection conexion, List<string> alertas,
+        Action<NivelSalud> subir, CancellationToken ct)
+    {
+        List<CodigoNuevo> nuevos;
+
+        try
+        {
+            nuevos = (await conexion.QueryAsync<CodigoNuevo>(new CommandDefinition(
+                """
+                SELECT codigo          AS "Codigo",
+                       clase           AS "Clase",
+                       ejemplo_mensaje AS "Mensaje"
+                  FROM codigos_sunat
+                 WHERE origen = 'nuevo' AND revisado_en IS NULL
+                 ORDER BY primera_vez DESC
+                 LIMIT 10
+                """,
+                cancellationToken: ct))).ToList();
+        }
+        catch (PostgresException ex) when (ex.SqlState is "42P01" or "42501")
+        {
+            return;
+        }
+
+        if (nuevos.Count == 0) return;
+
+        if (alertas.Count == 1 && alertas[0] == "Todo en orden.")
+            alertas.Clear();
+
+        // Van primero: es lo más importante que puede decir este panel.
+        for (var i = nuevos.Count - 1; i >= 0; i--)
+        {
+            var n = nuevos[i];
+            var que = n.Clase == "observacion" ? "observación" : "respuesta";
+            var mensaje = n.Mensaje is { Length: > 140 } m ? m[..140] + "…" : n.Mensaje;
+
+            alertas.Insert(0,
+                $"SUNAT devolvió un código nunca visto: {n.Codigo} ({que}). " +
+                (mensaje is null ? "" : $"«{mensaje}» ") +
+                "Revísalo en Vigilancia SUNAT.");
+
+            subir(RepositorioVigilancia.Gravedad(n.Codigo, n.Clase) == "problema"
+                ? NivelSalud.Problema
+                : NivelSalud.Atencion);
+        }
+    }
+
+    private sealed record CodigoNuevo(string Codigo, string Clase, string? Mensaje);
 
     private record Contadores(
         int Pendientes,

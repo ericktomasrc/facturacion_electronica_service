@@ -1,0 +1,3 @@
+# En el servidor (Linux) estos archivos tienen que tener finales de línea LF,
+# aunque se editen en Windows. Un .sh con CRLF falla con «$'\r': command not found».
+* text=auto eol=lf

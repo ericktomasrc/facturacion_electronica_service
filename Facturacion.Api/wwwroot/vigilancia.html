@@ -1,0 +1,1328 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vigilancia SUNAT · Facturación electrónica</title>
+<style>
+  :root {
+    --fondo:#f6f7f9; --panel:#ffffff; --sutil:#f1f3f5; --borde:#e3e6ea;
+    --texto:#1b1f24; --tenue:#5c6570;
+    --sano:#15803d; --atencion:#a16207; --problema:#b91c1c;
+    --acento:#2563eb;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo:#0f1115; --panel:#171a21; --sutil:#1c212b; --borde:#262b36;
+      --texto:#e6e8ec; --tenue:#98a1ae;
+      --sano:#3fb950; --atencion:#d29922; --problema:#f85149;
+      --acento:#4493f8;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px; background:var(--fondo); color:var(--texto);
+         font:15px/1.55 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
+  .contenedor { max-width:1000px; margin:0 auto; }
+
+  header { display:flex; align-items:center; justify-content:space-between;
+           gap:16px; margin-bottom:8px; flex-wrap:wrap; }
+  h1 { font-size:19px; margin:0; font-weight:500; }
+
+  nav { display:flex; gap:18px; border-bottom:1px solid var(--borde);
+        margin-bottom:16px; }
+  nav a { color:var(--tenue); text-decoration:none; font-size:14px;
+          padding:0 2px 9px; border-bottom:2px solid transparent;
+          margin-bottom:-1px; }
+  nav a:hover { color:var(--texto); }
+  nav a.activo { color:var(--texto); border-bottom-color:var(--acento); }
+
+  .controles { display:flex; gap:8px; align-items:center; }
+  .usuario { display:flex; align-items:center; gap:12px; font-size:13.5px;
+             color:var(--tenue); }
+  .usuario .rol { background:var(--sutil); border-radius:var(--radio);
+                  padding:2px 9px; font-size:12px; }
+  .usuario a { color:var(--acento); text-decoration:none; }
+  .usuario a:hover { text-decoration:underline; }
+
+  input, button { background:var(--panel); border:1px solid var(--borde);
+    color:var(--texto); padding:7px 11px; border-radius:7px; font:inherit;
+    font-size:14px; }
+  button { cursor:pointer; }
+  button:hover:not(:disabled) { border-color:#3a4152; }
+  button:disabled { opacity:.5; cursor:default; }
+  button.principal { background:var(--acento); border-color:var(--acento);
+                     color:#fff; font-weight:500; }
+  button.mini { padding:4px 9px; font-size:13px; }
+
+  .semaforo { display:flex; align-items:center; gap:12px; padding:16px 18px;
+    border-radius:10px; border:1px solid var(--borde); background:var(--panel);
+    margin-bottom:18px; }
+  .punto { width:13px; height:13px; border-radius:50%; flex:none; }
+  .Sano .punto { background:var(--sano); }
+  .Atencion .punto { background:var(--atencion); }
+  .Problema .punto { background:var(--problema); }
+  .Sano .etiqueta { color:var(--sano); }
+  .Atencion .etiqueta { color:var(--atencion); }
+  .Problema .etiqueta { color:var(--problema); }
+  .etiqueta { font-weight:500; letter-spacing:.02em; }
+  .alertas { margin:0; padding-left:20px; }
+  .alertas li { margin:5px 0; }
+
+  .tarjetas { display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:12px; margin-bottom:18px; }
+  .tarjeta { background:var(--sutil); border-radius:10px; padding:14px 16px; }
+  .tarjeta .valor { font-size:26px; font-weight:500; }
+  .tarjeta .nombre { color:var(--tenue); font-size:13px; margin-top:2px; }
+
+  section { background:var(--panel); border:1px solid var(--borde);
+            border-radius:10px; padding:16px 18px; margin-bottom:14px; }
+  h2 { font-size:14px; margin:0 0 12px; color:var(--tenue);
+       text-transform:uppercase; letter-spacing:.06em; font-weight:500; }
+
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th { text-align:left; color:var(--tenue); font-weight:500; padding:6px 8px;
+       border-bottom:1px solid var(--borde); }
+  td { padding:8px; border-bottom:1px solid #1d222c; vertical-align:top; }
+  tr:last-child td { border-bottom:none; }
+
+  .mono { font-family:ui-monospace, Consolas, monospace; font-size:13px; }
+  .recorte { max-width:400px; overflow:hidden; text-overflow:ellipsis;
+             white-space:nowrap; }
+  .vacio { color:var(--tenue); font-style:italic; }
+  .mal { color:var(--problema); }
+  footer { color:var(--tenue); font-size:13px; margin-top:18px; }
+
+  #avisos { position:fixed; top:20px; right:20px; z-index:100;
+            display:flex; flex-direction:column; gap:8px; max-width:380px; }
+  .aviso-flotante { background:var(--panel); border:1px solid var(--borde);
+    border-left:3px solid var(--acento); border-radius:8px; padding:11px 14px;
+    font-size:14px; box-shadow:0 6px 20px rgba(0,0,0,.4);
+    animation:entrar .18s ease-out; }
+  .aviso-flotante.ok  { border-left-color:var(--sano); }
+  .aviso-flotante.mal { border-left-color:var(--problema); }
+  .aviso-flotante .titulo { font-weight:500; margin-bottom:2px; }
+  .aviso-flotante .detalle { color:var(--tenue); font-size:13px; }
+  @keyframes entrar { from { opacity:0; transform:translateX(16px); } }
+
+  /* --- Vigilancia SUNAT --------------------------------------------------- */
+  .bajada { color:var(--tenue); font-size:14px; margin:0 0 10px; }
+  .sencillo { font-size:14px; margin:0 0 16px; padding:10px 14px; background:var(--sutil);
+              border-left:3px solid var(--acento); border-radius:6px; line-height:1.55; }
+
+  /* --- Empresa de control (17 oct): borde punteado y rayas, para que no se
+     confunda con una empresa de verdad. */
+  section.control { border:2px dashed var(--tenue);
+    background:repeating-linear-gradient(135deg, var(--panel), var(--panel) 12px, var(--sutil) 12px, var(--sutil) 24px); }
+  .control .quien { display:flex; justify-content:space-between; align-items:center; gap:12px;
+                    flex-wrap:wrap; margin-bottom:12px; }
+  .control .tarjetas { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));
+                       gap:10px; margin-bottom:14px; }
+  .control .tarjeta { background:var(--panel); border:1px solid var(--borde); border-radius:8px; padding:10px 12px; }
+  .control .tarjeta .k { font-size:12px; color:var(--tenue); }
+  .control .tarjeta .v { font-size:17px; font-weight:500; }
+  .control .nota-control { font-size:13px; color:var(--tenue); margin:10px 0 0; }
+  .cabecera-seccion { display:flex; justify-content:space-between; gap:12px;
+                      flex-wrap:wrap; align-items:flex-start; }
+  .filtros { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
+  .filtros button.activo { background:var(--acento); border-color:var(--acento); color:#fff; }
+  .desplazable { overflow-x:auto; }
+  .desplazable table { min-width:760px; }
+
+  /* --- Pestañas y listas por páginas (14 oct) ----------------------------
+     Una sección a la vez; cada pestaña con su número. Las listas largas se
+     desplazan por dentro con los títulos fijos, y se piden por páginas. */
+  .pestanas { display:flex; gap:2px; border-bottom:1px solid var(--borde); margin:0 0 16px;
+              overflow-x:auto; }
+  .pestanas button { border:0; border-bottom:2px solid transparent; border-radius:0; background:none;
+                     padding:10px 14px; color:var(--tenue); font:inherit; font-size:14.5px; cursor:pointer;
+                     white-space:nowrap; display:flex; gap:8px; align-items:center; }
+  .pestanas button:hover { color:var(--texto); }
+  .pestanas button[aria-selected="true"] { color:var(--texto); border-bottom-color:var(--acento); font-weight:500; }
+  .insignia { font-size:12px; line-height:18px; border-radius:20px; padding:0 7px; min-width:20px;
+              text-align:center; background:var(--sutil); color:var(--tenue); font-weight:500; }
+  .insignia.problema { background:var(--problema); color:#fff; }
+  .insignia.atencion { background:var(--atencion); color:#fff; }
+  .insignia.sano { background:none; color:var(--sano); }
+  .lista-larga { max-height:560px; overflow-y:auto; }
+  div.lista-larga { border:1px solid var(--borde); border-radius:8px; }
+  ul.lista-larga { max-height:420px; }
+  .lista-larga th { position:sticky; top:0; z-index:1; background:var(--panel);
+                    box-shadow:inset 0 -1px 0 var(--borde); }
+  .barra-codigos { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;
+                   align-items:flex-start; margin-bottom:12px; }
+  .barra-codigos .filtros { margin-bottom:0; }
+  .barra-codigos input { min-width:260px; flex:0 1 320px; }
+  .paginador { display:flex; justify-content:space-between; align-items:center; gap:12px;
+               flex-wrap:wrap; margin-top:10px; font-size:13px; color:var(--tenue); }
+  .paginador .botones { display:flex; gap:8px; align-items:center; }
+  .pasos-catalogo { margin:0 0 14px; padding-left:22px; display:grid; gap:8px; font-size:14px; }
+  .pasos-catalogo li { line-height:1.9; }
+  table.esq { width:100%; border-collapse:collapse; font-size:14px; }
+  table.esq th { text-align:left; color:var(--tenue); font-weight:500; font-size:13px; padding:6px 8px;
+                 border-bottom:1px solid var(--borde); }
+  table.esq td { padding:7px 8px; border-bottom:1px solid var(--borde); vertical-align:top; }
+  table.esq .ok { color:var(--sano); }
+  table.esq .falta { color:var(--problema); font-weight:500; }
+  .subtitulo-xsd { font-size:15px; font-weight:500; margin:22px 0 4px; }
+  .num { text-align:right; font-variant-numeric:tabular-nums; }
+  .pildora { display:inline-block; font-size:12px; border-radius:20px; padding:0 8px;
+             border:1px solid var(--borde); color:var(--tenue); white-space:nowrap; }
+  .pildora.problema { color:var(--problema); border-color:var(--problema); }
+  .pildora.atencion { color:var(--atencion); border-color:var(--atencion); }
+  .pildora.sano { color:var(--sano); border-color:var(--sano); }
+  tr.nuevo td:first-child { box-shadow:inset 3px 0 0 var(--problema); }
+  tr.nuevo.atencion td:first-child { box-shadow:inset 3px 0 0 var(--atencion); }
+  .sub { color:var(--tenue); font-size:13px; }
+  .mensaje { max-width:420px; overflow-wrap:anywhere; }
+
+  /* Color según lo que dijo SUNAT (14 oct): verde aceptado, rojo rechazo o
+     error, ámbar observación. La fila entera lleva un tinte del mismo color. */
+  .codigo { font-family:ui-monospace, Consolas, monospace; font-size:13px; font-weight:600;
+            border-radius:6px; padding:1px 7px; border:1px solid currentColor; }
+  .codigo.ok  { color:var(--sano); }
+  .codigo.mal { color:var(--problema); }
+  .codigo.obs { color:var(--atencion); }
+  .codigo.neutro { color:var(--tenue); }
+  tr.fila-ok  td { background:color-mix(in srgb, var(--sano) 7%, transparent); }
+  tr.fila-mal td { background:color-mix(in srgb, var(--problema) 8%, transparent); }
+  tr.fila-obs td { background:color-mix(in srgb, var(--atencion) 8%, transparent); }
+  tr.fila-ok  td:first-child { box-shadow:inset 3px 0 0 var(--sano); }
+  tr.fila-mal td:first-child { box-shadow:inset 3px 0 0 var(--problema); }
+  tr.fila-obs td:first-child { box-shadow:inset 3px 0 0 var(--atencion); }
+  tr.fila-mal .mensaje { color:var(--problema); }
+  .leyenda { display:flex; gap:14px; flex-wrap:wrap; font-size:13px; color:var(--tenue); margin:0 0 12px; }
+  .leyenda span { display:inline-flex; align-items:center; gap:6px; }
+  .leyenda i { width:12px; height:12px; border-radius:3px; display:inline-block; }
+  .lista-correos { list-style:none; margin:0 0 12px; padding:0; display:grid; gap:6px; }
+  .lista-correos li { display:flex; justify-content:space-between; align-items:center; gap:10px;
+                      padding:7px 10px; background:var(--sutil); border-radius:8px; flex-wrap:wrap; }
+  .fila-form { display:flex; gap:8px; flex-wrap:wrap; }
+  .fila-form input { flex:1 1 240px; min-width:0; }
+  .acciones { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+
+  .velo { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex;
+          align-items:center; justify-content:center; padding:16px; z-index:90; }
+  .dialogo { background:var(--panel); border:1px solid var(--borde); border-radius:12px;
+             width:100%; max-width:480px; padding:18px 20px; }
+  .dialogo h3 { margin:0 0 6px; font-size:16px; font-weight:500; }
+  .dialogo label { display:block; font-size:13.5px; color:var(--tenue); margin:12px 0 4px; }
+  .dialogo textarea { width:100%; background:var(--fondo); color:var(--texto);
+             border:1px solid var(--borde); border-radius:7px; padding:8px 10px; font:inherit; font-size:14px; }
+  .dialogo .pie { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+  .dialogo .error { color:var(--problema); font-size:13.5px; margin-top:8px; }
+  /* --- Prueba de madrugada (migración 030) --------------------------- */
+  .rejilla td, .rejilla th { padding:5px 6px; }
+  .rejilla th.noche { text-align:center; font-size:12.5px; white-space:nowrap; }
+  .rejilla td:first-child { min-width:220px; }
+  .celda { display:block; width:30px; height:22px; margin:0 auto; border-radius:5px; border:0; padding:0; cursor:pointer; }
+  .c-ok { background:var(--sano); }
+  .c-obs { background:var(--atencion); }
+  .c-mal, .c-error_api { background:var(--problema); }
+  .c-caida { background:repeating-linear-gradient(45deg, var(--borde) 0 4px, var(--sutil) 4px 8px); }
+  .c-pend { background:transparent; border:1px dashed var(--tenue); }
+  .c-vacia { background:transparent; cursor:default; }
+  .celda.abierta { outline:2px solid var(--acento); outline-offset:2px; }
+  .ficha { margin-top:14px; border:1px solid var(--borde); border-radius:10px; padding:14px 16px; background:var(--sutil); }
+  .ficha dl { display:grid; grid-template-columns:max-content 1fr; gap:6px 14px; margin:0; font-size:14px; }
+  .ficha dt { color:var(--tenue); }
+  .ficha dd { margin:0; min-width:0; overflow-wrap:anywhere; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+
+<div id="avisos"></div>
+
+<div class="contenedor">
+  <header>
+    <h1>Facturación electrónica</h1>
+    <div id="usuario-actual" class="usuario"></div>
+  </header>
+
+  <nav></nav>
+
+  <div class="acciones">
+    <button id="actualizar" class="principal">Actualizar</button>
+    <button id="revisar">Revisar ahora</button>
+  </div>
+
+  <div id="contenido">
+    <section class="vacio">Cargando…</section>
+  </div>
+
+  <footer id="pie"></footer>
+</div>
+
+<!-- Ventana para marcar un código como revisado. No se usa prompt(). -->
+<div class="velo" id="velo-revisado" hidden>
+  <div class="dialogo" role="dialog" aria-modal="true" aria-labelledby="titulo-revisado">
+    <h3 id="titulo-revisado">Marcar revisado</h3>
+    <p class="sub" style="margin:0">Deja dicho qué es y si hubo que hacer algo. Lo lee quien se lo vuelva a encontrar.
+      La revisión no se puede cambiar después.</p>
+    <label for="nota-revisado">Nota</label>
+    <textarea id="nota-revisado" rows="4" maxlength="1000"
+      placeholder="Observación nueva sobre el catálogo de unidades. No afecta la aceptación. Sin cambios."></textarea>
+    <div class="error" id="error-revisado" hidden></div>
+    <div class="pie">
+      <button id="cancelar-revisado">Cancelar</button>
+      <button class="principal" id="guardar-revisado">Marcar revisado</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ventana para confirmar que se quita un correo. No se usa confirm(). -->
+<div class="velo" id="velo-quitar" hidden>
+  <div class="dialogo" role="dialog" aria-modal="true" aria-labelledby="titulo-quitar">
+    <h3 id="titulo-quitar">Quitar de la lista</h3>
+    <p style="margin:0" id="texto-quitar"></p>
+    <div class="pie">
+      <button id="cancelar-quitar">Cancelar</button>
+      <button class="principal" id="confirmar-quitar">Quitar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// NO SE USA "$" COMO NOMBRE DE FUNCIÓN: Browser Link (Visual Studio) inyecta
+// jQuery y espera encontrarlo ahí.
+const elem = id => document.getElementById(id);
+
+// Se define antes que cualquier función que la use.
+const esc = t => String(t ?? "").replace(/[&<>"']/g,
+  c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+let usuarioActual = null;
+let datos = null;          // el resumen: los números de las pestañas
+let pestana = location.hash.slice(1) || null;   // la pestaña abierta (#codigos…)
+const codigos = { filtro: "nuevos", q: "", pagina: 1, datos: null };   // una página
+const correos = { pagina: 1, datos: null };                              // una página
+let madrugada = null;      // la prueba de madrugada (migración 030)
+let catalogo = null;       // el catálogo de productos de SUNAT (migración 031)
+let esquemas = null;       // los esquemas XSD y sus avisos (migración 033)
+const avisosXsd = { pagina: 1 };
+let casoAbierto = null;    // { corrida, caso } de la casilla elegida
+let relojPantalla = null;  // vuelve a cargar mientras una prueba corre
+
+// ------------------------------------------------------------------- menú
+// Igual que en las demás páginas. OCULTAR NO ES PROTEGER: el servidor
+// comprueba el permiso en cada petición.
+const PANTALLAS = [
+  { url:"/diagnostico.html", texto:"Estado del servicio", permiso:"diagnostico.ver" },
+  { url:"/admin.html",       texto:"Empresas",            permiso:"empresas.ver" },
+  { url:"/comprobantes.html",texto:"Comprobantes",        permiso:"comprobantes.ver" },
+  { url:"/vigilancia.html",  texto:"Vigilancia SUNAT",    permiso:"diagnostico.ver" },
+  { url:"/usuarios.html",    texto:"Usuarios",            permiso:"usuarios.gestionar" },
+  { url:"/cuenta.html",      texto:"Mi cuenta",           permiso:null }
+];
+
+const puede = permiso => usuarioActual?.permisos?.includes(permiso) === true;
+
+function pintarMenu() {
+  const menu = document.querySelector("nav");
+  const actual = location.pathname;
+  menu.innerHTML = PANTALLAS
+    .filter(p => p.permiso === null || puede(p.permiso))
+    .map(p => `<a href="${p.url}" class="${actual === p.url ? "activo" : ""}">${esc(p.texto)}</a>`)
+    .join("");
+}
+
+async function cargarUsuario() {
+  const r = await fetch("/admin/yo");
+  if (r.status === 401) { location.href = "/login.html"; return false; }
+
+  usuarioActual = await r.json();
+
+  elem("usuario-actual").innerHTML =
+    `<span>${esc(usuarioActual.nombre || usuarioActual.correo)}</span>` +
+    `<span class="rol">${esc(usuarioActual.rol)}</span>` +
+    `<a href="#" id="salir">Salir</a>`;
+
+  elem("salir").onclick = async e => {
+    e.preventDefault();
+    await fetch("/admin/sesion", { method: "DELETE" });
+    location.href = "/login.html";
+  };
+
+  pintarMenu();
+  return true;
+}
+
+function avisar(titulo, detalle = "", tipo = "") {
+  const caja = document.createElement("div");
+  caja.className = "aviso-flotante " + tipo;
+  caja.innerHTML = `<div class="titulo">${esc(titulo)}</div>` +
+    (detalle ? `<div class="detalle">${esc(detalle)}</div>` : "");
+  elem("avisos").appendChild(caja);
+  setTimeout(() => caja.remove(), tipo === "mal" ? 8000 : 4000);
+}
+
+// Fechas en hora de Lima, se mire desde donde se mire.
+const fecha = v => v ? new Date(v).toLocaleString("es-PE", {
+  timeZone: "America/Lima", day: "numeric", month: "short", year: "numeric",
+  hour: "2-digit", minute: "2-digit" }) : "—";
+
+async function pedir(url, opciones = {}) {
+  const r = await fetch(url, {
+    ...opciones,
+    headers: opciones.body ? { "Content-Type": "application/json" } : undefined
+  });
+  if (r.status === 401) { location.href = "/login.html"; throw new Error("Sesión vencida"); }
+  const cuerpo = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const e = new Error(cuerpo.error || `El servicio respondió ${r.status}.`);
+    e.detalle = cuerpo.detalle || "";
+    throw e;
+  }
+  return cuerpo;
+}
+
+// ------------------------------------------------------------------ carga
+async function cargar() {
+  const boton = elem("actualizar");
+  boton.disabled = true;
+  try {
+    // Lo liviano de todas las pestañas (sus números), y una página de cada
+    // lista. Nada viene entero: los códigos y los correos llegan por páginas.
+    datos = await pedir("/admin/vigilancia/resumen");
+    madrugada = await pedir("/admin/vigilancia/madrugada")
+      .catch(e => ({ error: e.message, detalle: e.detalle }));
+    catalogo = await pedir("/admin/vigilancia/catalogo")
+      .catch(e => ({ error: e.message, detalle: e.detalle }));
+    esquemas = await pedir(`/admin/vigilancia/xsd?pagina=${avisosXsd.pagina}`)
+      .catch(e => ({ error: e.message, detalle: e.detalle }));
+    await Promise.all([cargarCodigos(), cargarCorreos()]);
+
+    if (!PESTANAS.some(p => p.id === pestana)) pestana = pestanaInicial();
+    pintar();
+    elem("pie").textContent = datos.ultimaRevisionEn
+      ? `Última revisión: ${fecha(datos.ultimaRevisionEn)} · se revisa sola cada 5 minutos.`
+      : "Todavía no se hizo la primera revisión. Pulsa «Revisar ahora» o espera unos minutos.";
+  } catch (e) {
+    elem("contenido").innerHTML =
+      `<section class="mal">No se pudo cargar: ${esc(e.message)} ${esc(e.detalle || "")}</section>`;
+  } finally {
+    boton.disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------- pestañas
+// UNA SECCIÓN A LA VEZ. Cada pestaña lleva su número: se ve dónde hay algo
+// que mirar sin abrirlas. La elegida queda en la dirección (#codigos), así que
+// recargar, o el enlace del correo de alerta, abren la que corresponde.
+const PESTANAS = [
+  { id: "madrugada", texto: "Prueba de madrugada" },
+  { id: "catalogo",  texto: "Catálogo de productos SUNAT" },
+  { id: "xsd",       texto: "Esquemas XSD" },
+  { id: "codigos",   texto: "Códigos de SUNAT" },
+  { id: "correos",   texto: "Correos para alertas" }
+];
+
+// Sin pestaña en la dirección, se abre la que tiene algo pendiente.
+function pestanaInicial() {
+  if (datos.codigos.nuevos > 0) return "codigos";
+  if (fallosMadrugada() > 0) return "madrugada";
+  if (catalogo && !catalogo.error &&
+      ((catalogo.actual && !catalogo.actual.igual) || catalogo.tocaComparar)) return "catalogo";
+  return "madrugada";
+}
+
+// Casos de la última corrida que salieron mal (rechazo, o nuestra API no lo aceptó).
+function fallosMadrugada() {
+  if (!madrugada || madrugada.error || !madrugada.corridas?.length) return 0;
+  const ultima = Math.max(...madrugada.corridas.map(c => c.id));
+  return madrugada.casos.filter(k => k.pruebaId === ultima && (k.estado === "mal" || k.estado === "error_api")).length;
+}
+
+function insignia(id) {
+  if (id === "codigos")
+    return datos.codigos.nuevos > 0 ? `<span class="insignia problema">${datos.codigos.nuevos}</span>` : "";
+  if (id === "correos")
+    return `<span class="insignia">${datos.correos.administradores + datos.correos.lista}</span>`;
+  if (id === "madrugada") {
+    if (madrugada && madrugada.corriendo) return `<span class="insignia">corriendo</span>`;
+    const n = fallosMadrugada();
+    return n > 0 ? `<span class="insignia problema">${n}</span>` : "";
+  }
+  if (id === "xsd") {
+    const k = esquemas;
+    if (!k || k.error || !k.worker) return "";
+    if (k.avisos && k.avisos.total > 0) return `<span class="insignia problema">${k.avisos.total}</span>`;
+    const faltan = moldesXsd().filter(m => !m.cargado).length;
+    return faltan > 0 ? `<span class="insignia atencion">${faltan}</span>` : `<span class="insignia sano">✓</span>`;
+  }
+  if (id === "catalogo") {
+    const k = catalogo;
+    if (!k || k.error) return "";
+    if (k.actual && !k.actual.igual) return `<span class="insignia problema">!</span>`;
+    if (k.tocaComparar) return `<span class="insignia atencion">!</span>`;
+    return k.ultimaComparacionEn ? `<span class="insignia sano">✓</span>` : "";
+  }
+  return "";
+}
+
+function pintar() {
+  const barra = `
+    <div class="pestanas" role="tablist">
+      ${PESTANAS.map(p => `
+        <button role="tab" data-pestana="${p.id}" aria-selected="${p.id === pestana}">
+          ${esc(p.texto)}${insignia(p.id)}</button>`).join("")}
+    </div>`;
+
+  const cuerpo =
+    pestana === "madrugada" ? seccionMadrugada()
+    : pestana === "catalogo" ? seccionCatalogo()
+    : pestana === "xsd" ? seccionXsd()
+    : pestana === "codigos" ? seccionCodigos()
+    : seccionCorreos();
+
+  elem("contenido").innerHTML = barra + cuerpo;
+
+  document.querySelectorAll("[data-pestana]").forEach(b =>
+    b.onclick = () => {
+      pestana = b.dataset.pestana;
+      history.replaceState(null, "", "#" + pestana);
+      pintar();
+    });
+
+  if (pestana === "madrugada") enlazarMadrugada();
+  else clearTimeout(relojPantalla);
+  if (pestana === "catalogo") enlazarCatalogo();
+  if (pestana === "xsd") enlazarXsd();
+  if (pestana === "codigos") enlazarCodigos();
+  if (pestana === "correos") enlazarCorreos();
+}
+
+// El paginador de las dos listas: «1–25 de 102», y anterior / siguiente.
+function paginador(p, prefijo) {
+  if (!p || p.total === 0) return "";
+  const desde = (p.pagina - 1) * p.tamano + 1;
+  const hasta = Math.min(p.pagina * p.tamano, p.total);
+  return `
+    <div class="paginador">
+      <span>${desde}–${hasta} de ${p.total.toLocaleString("es-PE")}</span>
+      ${p.paginas > 1 ? `
+      <span class="botones">
+        <button class="mini" data-${prefijo}-pagina="${p.pagina - 1}" ${p.pagina <= 1 ? "disabled" : ""}>‹ Anterior</button>
+        <span>Página ${p.pagina} de ${p.paginas}</span>
+        <button class="mini" data-${prefijo}-pagina="${p.pagina + 1}" ${p.pagina >= p.paginas ? "disabled" : ""}>Siguiente ›</button>
+      </span>` : ""}
+    </div>`;
+}
+
+// ------------------------------------------------------------------ códigos
+async function cargarCodigos() {
+  const q = encodeURIComponent(codigos.q.trim());
+  codigos.datos = await pedir(
+    `/admin/vigilancia/codigos?filtro=${codigos.filtro}&q=${q}&pagina=${codigos.pagina}&tamano=25`);
+  // Si la página quedó vacía (se revisó el último de ella), a la anterior.
+  if (codigos.datos.items.length === 0 && codigos.pagina > 1) {
+    codigos.pagina = codigos.datos.paginas;
+    codigos.datos = await pedir(
+      `/admin/vigilancia/codigos?filtro=${codigos.filtro}&q=${q}&pagina=${codigos.pagina}&tamano=25`);
+  }
+}
+
+const FILTROS_CODIGOS = [
+  { id: "nuevos",        texto: "Nuevos sin revisar" },
+  { id: "todos",         texto: "Todos" },
+  { id: "rechazos",      texto: "Rechazos" },
+  { id: "observaciones", texto: "Observaciones" },
+  { id: "aceptados",     texto: "Aceptados" }
+];
+
+function seccionCodigos() {
+  return `
+    <section>
+      <h2>Códigos de SUNAT</h2>
+      <p class="bajada">Cada código que SUNAT devuelve, a cualquier empresa, queda anotado. Si aparece
+        uno que nunca había salido, llega un correo: el primer cliente que se topa con una regla nueva
+        de SUNAT protege a los demás. Lo que ya existía al instalar esto quedó como «conocido» y no avisa.</p>
+      <p class="sencillo"><b>En palabras simples:</b> cada vez que SUNAT contesta por un comprobante, lo hace con un número (por ejemplo, 0 quiere decir «aceptado»). Aquí se guardan todos esos números. Si un día SUNAT contesta con uno que nunca habíamos visto, puede ser una regla nueva, y te llega un correo para que lo mires. Cuando ya lo miraste, pulsa «Marcar revisado».</p>
+      <div class="leyenda">
+        <span><i style="background:var(--sano)"></i>Aceptado</span>
+        <span><i style="background:var(--atencion)"></i>Aceptado con observación</span>
+        <span><i style="background:var(--problema)"></i>Rechazado o error del envío</span>
+      </div>
+      <div class="barra-codigos">
+        <div class="filtros">
+          ${FILTROS_CODIGOS.map(f => `
+          <button class="mini ${codigos.filtro === f.id ? "activo" : ""}" data-filtro="${f.id}">${f.texto}${
+            f.id === "nuevos" ? ` (${datos.codigos.nuevos})` : f.id === "todos" ? ` (${datos.codigos.total})` : ""}</button>`).join("")}
+        </div>
+        <input id="buscar-codigo" type="search" value="${esc(codigos.q)}" autocomplete="off"
+          placeholder="Buscar: 3496, «código de producto»…" aria-label="Buscar códigos">
+      </div>
+      <div id="tabla-codigos">${tablaCodigos()}</div>
+    </section>`;
+}
+
+function tablaCodigos() {
+  const p = codigos.datos;
+  if (!p) return `<p class="vacio">Cargando…</p>`;
+
+  if (p.items.length === 0)
+    return `<p class="vacio">${
+      codigos.q.trim() ? `Ningún código con «${esc(codigos.q.trim())}».`
+      : codigos.filtro === "nuevos"
+        ? "Ningún código nuevo sin revisar. Cuando SUNAT devuelva uno que nunca había salido, aparece aquí y llega un correo."
+        : "No hay códigos con este filtro."}</p>`;
+
+  const filas = p.items.map(c => {
+    const quien = [c.ejemploEmpresa && `${c.ejemploEmpresa} (${c.ejemploRuc})`, c.ejemploDocumento]
+      .filter(Boolean).join(" · ");
+    const revisado = c.revisadoEn
+      ? `<span class="sub">${esc(c.revisadoCorreo)} · ${fecha(c.revisadoEn)}<br>${esc(c.nota)}</span>`
+      : `<button class="mini" data-codigo="${esc(c.codigo)}" data-clase="${esc(c.clase)}">Marcar revisado</button>`;
+    const etiqueta = c.nuevo
+      ? ` <span class="pildora ${c.gravedad}">nuevo</span>`
+      : (c.origen === "historico" && !c.revisadoEn ? ` <span class="pildora">conocido</span>` : "");
+    const t = tipoCodigo(c);
+
+    return `
+      <tr class="fila-${t.clase}${c.nuevo ? " nuevo" : ""}">
+        <td><span class="codigo ${t.clase}">${esc(c.codigo)}</span>${etiqueta}<div class="sub">${t.texto}${esDeProducto(c.codigo) ? " · código de producto SUNAT" : ""}</div></td>
+        <td class="mensaje">${esc(c.ejemploMensaje || "—")}
+          ${quien ? `<div class="sub">Primera vez: ${esc(quien)}</div>` : ""}</td>
+        <td class="sub">${fecha(c.primeraVez)}</td>
+        <td class="sub">${fecha(c.ultimaVez)}</td>
+        <td class="num">${Number(c.veces).toLocaleString("es-PE")}</td>
+        <td class="num">${c.empresas}</td>
+        <td>${revisado}</td>
+      </tr>`;
+  }).join("");
+
+  return `
+    <div class="desplazable lista-larga">
+      <table>
+        <thead><tr><th>Código</th><th>Qué dijo SUNAT</th><th>Primera vez</th><th>Última vez</th>
+            <th class="num">Veces</th><th class="num">Empresas</th><th>Revisado</th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </div>
+    ${paginador(p, "codigos")}`;
+}
+
+// La tabla se repinta sola, sin la barra: así la casilla de búsqueda no
+// pierde lo que se está escribiendo.
+async function recargarTablaCodigos() {
+  try {
+    await cargarCodigos();
+  } catch (e) {
+    avisar(e.message, e.detalle, "mal");
+  }
+  elem("tabla-codigos").innerHTML = tablaCodigos();
+  enlazarTablaCodigos();
+}
+
+let relojBusqueda = null;
+
+function enlazarCodigos() {
+  document.querySelectorAll("[data-filtro]").forEach(b =>
+    b.onclick = async () => {
+      codigos.filtro = b.dataset.filtro;
+      codigos.pagina = 1;
+      document.querySelectorAll("[data-filtro]").forEach(x =>
+        x.classList.toggle("activo", x === b));
+      await recargarTablaCodigos();
+    });
+
+  elem("buscar-codigo").oninput = e => {
+    clearTimeout(relojBusqueda);
+    relojBusqueda = setTimeout(() => {
+      codigos.q = e.target.value;
+      codigos.pagina = 1;
+      recargarTablaCodigos();
+    }, 300);
+  };
+
+  enlazarTablaCodigos();
+}
+
+function enlazarTablaCodigos() {
+  document.querySelectorAll("[data-codigo]").forEach(b =>
+    b.onclick = () => abrirRevisado(b.dataset.codigo, b.dataset.clase));
+
+  document.querySelectorAll("[data-codigos-pagina]").forEach(b =>
+    b.onclick = async () => {
+      codigos.pagina = Number(b.dataset.codigosPagina);
+      await recargarTablaCodigos();
+      elem("tabla-codigos").scrollIntoView({ block: "nearest" });
+    });
+}
+
+// ------------------------------------------------------------------ correos
+async function cargarCorreos() {
+  correos.datos = await pedir(`/admin/vigilancia/correos?pagina=${correos.pagina}&tamano=10`);
+  if (correos.datos.items.length === 0 && correos.pagina > 1) {
+    correos.pagina = correos.datos.paginas;
+    correos.datos = await pedir(`/admin/vigilancia/correos?pagina=${correos.pagina}&tamano=10`);
+  }
+}
+
+function seccionCorreos() {
+  const editable = puede("usuarios.gestionar");
+  const p = correos.datos;
+
+  return `
+    <section>
+      <h2>Correos para alertas</h2>
+      <p class="bajada">Las alertas llegan siempre a los administradores del panel. Aquí puedes sumar
+        otros correos, por ejemplo uno compartido de soporte, para que el aviso no dependa de una sola persona.</p>
+      <p class="sencillo"><b>En palabras simples:</b> aquí decides a quién le llegan los avisos de esta pantalla. Pon al menos un correo que alguien lea todos los días.</p>
+      ${editable ? `
+      <form class="fila-form" id="form-correo" style="margin-bottom:16px">
+        <input id="nuevo-correo" type="email" placeholder="soporte@reyban.pe" autocomplete="off" aria-label="Correo para alertas">
+        <button class="principal" type="submit">Agregar</button>
+        <button type="button" id="probar-correo">Enviar correo de prueba</button>
+      </form>` : `<p class="sub">Solo un administrador puede cambiar esta lista.</p>`}
+      <div class="sub" style="margin-bottom:6px">Administradores (les llega siempre):</div>
+      <ul class="lista-correos">
+        ${p.administradores.length
+          ? p.administradores.map(a => `<li><span>${esc(a)}</span></li>`).join("")
+          : `<li><span class="mal">No hay ningún administrador activo.</span></li>`}
+      </ul>
+      <div class="sub" style="margin-bottom:6px">Además (${p.total}):</div>
+      <ul class="lista-correos lista-larga">
+        ${p.items.length
+          ? p.items.map(c => `
+            <li><span>${esc(c.correo)} <span class="sub">· lo agregó ${esc(c.agregadoCorreo)}, ${fecha(c.agregadoEn)}</span></span>
+              ${editable ? `<button class="mini" data-quitar="${c.id}" data-correo="${esc(c.correo)}">Quitar</button>` : ""}</li>`).join("")
+          : `<li><span class="sub">Nadie más todavía.</span></li>`}
+      </ul>
+      ${paginador(p, "correos")}
+    </section>`;
+}
+
+function enlazarCorreos() {
+  document.querySelectorAll("[data-quitar]").forEach(b =>
+    b.onclick = () => abrirQuitar(b.dataset.quitar, b.dataset.correo));
+
+  document.querySelectorAll("[data-correos-pagina]").forEach(b =>
+    b.onclick = async () => {
+      correos.pagina = Number(b.dataset.correosPagina);
+      try { await cargarCorreos(); } catch (e) { avisar(e.message, e.detalle, "mal"); }
+      pintar();
+    });
+
+  if (puede("usuarios.gestionar")) {
+    elem("form-correo").onsubmit = agregarCorreo;
+    elem("probar-correo").onclick = probarCorreo;
+  }
+}
+
+// Qué significa cada código: 0 aceptado; 0100-1999 SUNAT no pudo recibirlo;
+// 2000-3999 rechazado; 4000 en adelante, observación (el comprobante pasa).
+function tipoCodigo(c) {
+  if (c.clase === "observacion") return { clase: "obs", texto: "observación · aceptado" };
+  const m = String(c.codigo).match(/(\d+)$/);
+  const n = m ? parseInt(m[1], 10) : NaN;
+  if (n === 0) return { clase: "ok", texto: "aceptado" };
+  if (n >= 100 && n < 2000) return { clase: "mal", texto: "error del envío" };
+  if (n >= 2000 && n < 4000) return { clase: "mal", texto: "rechazado" };
+  if (n >= 4000) return { clase: "obs", texto: "observación" };
+  return { clase: "neutro", texto: "respuesta" };
+}
+
+// ------------------------------------------- catálogo de productos (031)
+// La lista oficial de códigos de producto de SUNAT (catálogo 25), comparada
+// con la que usa la plataforma en su buscador.
+//
+// EL EXCEL SE SUBE A MANO: el portal de SUNAT responde 403 a todo lo que no
+// sea un navegador (también a su propia página). Se baja con el navegador y
+// se sube aquí; cada 30 días sin comparar llega un recordatorio por correo.
+
+// Los códigos de SUNAT que hablan del código de producto.
+const esDeProducto = codigo => /\b(3496|3506|3181|4331|4332|4337)$/.test(String(codigo));
+
+function seccionCatalogo() {
+  const k = catalogo;
+  const cabecera = `
+      <h2>Catálogo de productos SUNAT</h2>
+      <p class="bajada">La plataforma lleva una copia de la lista oficial de códigos de producto de SUNAT
+        para su buscador. Si SUNAT agrega o quita códigos, hay que regenerarla: un código quitado hace
+        rechazar el comprobante desde 2027. SUNAT no deja que un programa baje su Excel, así que se hace
+        en dos pasos, y cada ${esc(k?.recordarCadaDias ?? 30)} días llega un correo recordándolo.</p>
+      <p class="sencillo"><b>En palabras simples:</b> cada producto que se factura lleva un código de una lista que publica SUNAT. Tenemos una copia de esa lista. Si SUNAT la cambia, bajas el archivo de su página y lo subes aquí para que nuestra copia quede igual. Si dice «Al día», no hay nada que hacer.</p>`;
+
+  if (!k || k.error)
+    return `<section>${cabecera}<p class="mal">${esc(k?.error || "Sin datos.")} ${esc(k?.detalle || "")}</p></section>`;
+
+  const a = k.actual;
+  let pildora, resumen;
+
+  if (a && !a.igual) {
+    pildora = `<span class="pildora problema">SUNAT cambió la lista</span>`;
+    resumen = "Hay que regenerar la lista de la plataforma con ese Excel.";
+  } else if (!k.ultimaComparacionEn) {
+    pildora = `<span class="pildora ${k.tocaComparar ? "atencion" : ""}">Sin comparar</span>`;
+    resumen = "Todavía no se subió ningún Excel. La lista de la plataforma salió del de SUNAT del 14/10/2026.";
+  } else if (k.tocaComparar) {
+    pildora = `<span class="pildora atencion">Toca comparar</span>`;
+    resumen = `Pasaron más de ${k.recordarCadaDias} días desde la última comparación.`;
+  } else {
+    pildora = `<span class="pildora sano">Al día</span>`;
+    resumen = "El último Excel subido trae exactamente los mismos códigos que usa la plataforma.";
+  }
+
+  const n = v => Number(v ?? 0).toLocaleString("es-PE");
+
+  const filas = [
+    ["La plataforma usa", `${n(k.enUso.codigos)} códigos · ${esc(k.enUso.version)}`],
+    ["Último Excel subido", a
+      ? `${n(a.codigos)} códigos · ${esc(a.origen || "")} · ${fecha(a.vistoUltima)}`
+      : "—"],
+    ...(a && !a.igual ? [
+      ["Agregados", `${n(a.agregados)}${a.agregadosMuestra ? `<div class="sub">${esc(a.agregadosMuestra)}</div>` : ""}`],
+      ["Quitados", `<span class="${a.quitados > 0 ? "mal" : ""}">${n(a.quitados)}</span>${a.quitadosMuestra ? `<div class="sub">${esc(a.quitadosMuestra)}</div>` : ""}`]
+    ] : []),
+    ["Próximo recordatorio", k.tocaComparar ? "ya toca" : fecha(k.proximoRecordatorioEn)]
+  ];
+
+  return `
+    <section>${cabecera}
+      <ol class="pasos-catalogo">
+        <li>Baja el Excel con tu navegador:
+          <a href="${esc(k.urlArchivo)}" target="_blank" rel="noopener">CCNU_MOD_2.xlsm</a>
+          <span class="sub">(o desde la <a href="${esc(k.urlPagina)}" target="_blank" rel="noopener">página de SUNAT</a>, «Catálogo de Producto»).</span></li>
+        <li>Súbelo aquí:
+          <button class="principal mini" id="subir-catalogo">Subir el Excel…</button>
+          <input type="file" id="archivo-catalogo" accept=".xlsm,.xlsx" hidden>
+          <span class="sub">Se compara en unos segundos, código por código.</span></li>
+      </ol>
+      <div class="ficha">
+        <p style="margin:0 0 10px">${pildora} <span class="sub">${esc(resumen)}</span></p>
+        <dl>${filas.map(([t, d]) => `<dt>${t}</dt><dd>${d}</dd>`).join("")}</dl>
+      </div>
+    </section>`;
+}
+
+function enlazarCatalogo() {
+  const boton = elem("subir-catalogo");
+  const archivo = elem("archivo-catalogo");
+  if (!boton || !archivo) return;
+
+  boton.onclick = () => archivo.click();
+
+  archivo.onchange = async () => {
+    const f = archivo.files[0];
+    if (!f) return;
+    boton.disabled = true;
+    boton.textContent = "Comparando…";
+    try {
+      // El cuerpo es el archivo tal cual: sin formulario.
+      const r = await fetch("/admin/vigilancia/catalogo/subir", {
+        method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: f
+      });
+      if (r.status === 401) { location.href = "/login.html"; return; }
+      const cuerpo = await r.json().catch(() => ({}));
+      if (!r.ok) throw Object.assign(new Error(cuerpo.error || `El servicio respondió ${r.status}.`),
+                                     { detalle: cuerpo.detalle || "" });
+      avisar(cuerpo.mensaje, "", cuerpo.igual ? "ok" : "mal");
+      await cargar();
+    } catch (e) {
+      avisar(e.message, e.detalle, "mal");
+    } finally {
+      archivo.value = "";
+      boton.disabled = false;
+      boton.textContent = "Subir el Excel…";
+    }
+  };
+}
+
+// -------------------------------------------------- esquemas XSD (033)
+const NOMBRE_MOLDE = {
+  Invoice: "Factura y boleta", CreditNote: "Nota de crédito", DebitNote: "Nota de débito",
+  DespatchAdvice: "Guía de remisión", SelfBilledInvoice: "Liquidación de compra",
+  SummaryDocuments: "Resumen diario de boletas", VoidedDocuments: "Comunicación de baja y reversiones",
+  Retention: "Comprobante de retención", Perception: "Comprobante de percepción"
+};
+
+function moldesXsd() {
+  const m = esquemas && !esquemas.error && esquemas.worker ? esquemas.worker.moldes || [] : [];
+  const orden = Object.keys(NOMBRE_MOLDE);
+  return [...m].sort((a, b) => orden.indexOf(a.raiz) - orden.indexOf(b.raiz));
+}
+
+function seccionXsd() {
+  const k = esquemas;
+  const cabecera = `
+      <h2>Esquemas XSD</h2>
+      <p class="bajada">Antes de enviar cada XML a SUNAT, el servicio lo compara con el «molde» oficial (XSD)
+        de su tipo. Si algo está fuera de sitio, se ve aquí antes de que SUNAT lo rechace y se pierda el
+        número. SUNAT no deja que un programa baje sus esquemas, así que se hace en dos pasos.</p>
+      <p class="sencillo"><b>En palabras simples:</b> cada tipo de comprobante tiene que armarse con una forma exacta, como un formulario con casillas fijas. El «molde» es la plantilla oficial de esa forma. Antes de mandar cada comprobante a SUNAT lo revisamos contra su plantilla, para encontrar errores antes de que SUNAT lo rechace. Si falta una plantilla, ese tipo de comprobante sale sin revisar.</p>`;
+
+  if (!k || k.error)
+    return `<section>${cabecera}<p class="mal">${esc(k?.error || "Sin datos.")} ${esc(k?.detalle || "")}</p></section>`;
+
+  const w = k.worker;
+  const moldes = moldesXsd();
+  const faltan = moldes.filter(m => !m.cargado).length;
+
+  const pildora = !w ? `<span class="pildora atencion">El Worker todavía no informó</span>`
+    : faltan > 0 ? `<span class="pildora atencion">Faltan ${faltan} de ${moldes.length}</span>`
+    : `<span class="pildora sano">Completo</span>`;
+
+  const nota = !w
+    ? "Cuando el Worker arranque, dice aquí qué moldes tiene (tarda unos segundos)."
+    : `${faltan > 0 ? "Esos documentos salen sin comprobar. " : ""}` +
+      `Modo: ${w.bloquea ? "<b>bloquea</b> el envío" : "<b>solo avisa</b>, no bloquea el envío"}. ` +
+      `Informó ${esc(fecha(w.informadoEn))} (${esc(w.maquina)}).` +
+      (w.alDia ? "" : " <b>Todavía no copia lo último que se subió</b>: tarda unos 2 minutos.");
+
+  const subida = k.subida && k.subida.archivos > 0
+    ? `<p class="sub" style="margin:10px 0 0">Subidos desde el panel: ${esc(k.subida.archivos)} archivo(s);
+         el último, ${esc(fecha(k.subida.ultimaEn))} por ${esc(k.subida.ultimaPor || "")}.</p>`
+    : "";
+
+  const filas = moldes.map(m => `
+      <tr><td>${esc(NOMBRE_MOLDE[m.raiz] || m.raiz)}</td>
+          <td class="mono">${esc(m.archivo)}</td>
+          <td class="${m.cargado ? "ok" : "falta"}">${m.cargado ? "✓ Cargado" : "Falta"}</td></tr>`).join("");
+
+  const a = k.avisos;
+  const avisos = !a || a.total === 0
+    ? `<p class="vacio">Ningún XML falló contra su molde en los últimos 30 días.</p>`
+    : `<table class="esq">
+         <tr><th>Cuándo</th><th>Empresa</th><th>Documento</th><th>Qué falla</th></tr>
+         ${a.items.map(v => `
+           <tr><td>${esc(fecha(v.creadoEn))}</td><td class="mono">${esc(v.ruc || "—")}</td>
+               <td class="mono">${esc(v.documento)}</td>
+               <td>Línea ${esc(v.linea)}, posición ${esc(v.posicion)}${v.esquema ? ` · molde <span class="mono">${esc(v.esquema)}</span>` : ""}
+                 <div class="sub" title="${esc(v.original)}">${esc(v.mensaje)}</div></td></tr>`).join("")}
+       </table>
+       ${paginador(a, "xsd")}`;
+
+  return `
+    <section>${cabecera}
+      <ol class="pasos-catalogo">
+        <li>Consigue los esquemas. <b>SUNAT ya no los deja descargar</b>: su página
+          <a href="${esc(k.urlPagina)}" target="_blank" rel="noopener">«Guías y manuales»</a> los nombra en
+          «Otros archivos», pero el enlace lleva a una página sin archivos (revisado el 17 oct de 2026).
+          Si los consigues por otra vía (un OSE, tu proveedor de facturación anterior), súbelos aquí.
+          Mientras falten, esos documentos se envían igual, solo que sin esta revisión previa; la prueba de
+          madrugada confirma cada noche que SUNAT los acepta. El nombre del archivo no importa: se reconoce
+          cada uno por lo que declara.</li>
+        <li>Súbelo aquí:
+          <button class="principal mini" id="subir-xsd">Subir esquemas (.zip o .xsd)…</button>
+          <input type="file" id="archivo-xsd" accept=".zip,.xsd" multiple hidden>
+          <span class="sub">El Worker los copia y los usa en unos 2 minutos; no hace falta reiniciar.</span></li>
+      </ol>
+      <div class="ficha">
+        <p style="margin:0 0 10px">${pildora} <span class="sub">${nota}</span></p>
+        ${w ? `<table class="esq"><tr><th>Documento</th><th>Molde</th><th>Estado</th></tr>${filas}</table>` : ""}
+        ${subida}
+      </div>
+      <h3 class="subtitulo-xsd">XML que no cumplieron el molde · últimos 30 días</h3>
+      <p class="sub" style="margin:0 0 6px">${w && w.bloquea
+        ? "Con el modo «bloquea», las facturas y notas que fallan no se envían; los resúmenes y las bajas salen igual."
+        : "Salieron igual a SUNAT (solo aviso). Si SUNAT los rechaza después, el código aparece en «Códigos de SUNAT»."}</p>
+      <div class="ficha">${avisos}</div>
+    </section>`;
+}
+
+function enlazarXsd() {
+  const boton = elem("subir-xsd");
+  const archivo = elem("archivo-xsd");
+  if (boton && archivo) {
+    boton.onclick = () => archivo.click();
+
+    archivo.onchange = async () => {
+      const lista = [...archivo.files];
+      if (lista.length === 0) return;
+      boton.disabled = true;
+      boton.textContent = "Subiendo…";
+      try {
+        for (const f of lista) {
+          // El cuerpo es el archivo tal cual; su nombre, en la cabecera.
+          const r = await fetch("/admin/vigilancia/xsd/subir", {
+            method: "POST",
+            headers: { "Content-Type": "application/octet-stream", "X-Nombre-Archivo": f.name },
+            body: f
+          });
+          if (r.status === 401) { location.href = "/login.html"; return; }
+          const cuerpo = await r.json().catch(() => ({}));
+          if (!r.ok) throw Object.assign(new Error(`${f.name}: ${cuerpo.error || `El servicio respondió ${r.status}.`}`),
+                                         { detalle: cuerpo.detalle || "" });
+          avisar(cuerpo.mensaje,
+                 cuerpo.ignorados && cuerpo.ignorados.length
+                   ? `Se ignoró: ${cuerpo.ignorados.slice(0, 5).join(", ")}${cuerpo.ignorados.length > 5 ? "…" : ""}`
+                   : "", "ok");
+        }
+        await cargar();
+      } catch (e) {
+        avisar(e.message, e.detalle, "mal");
+      } finally {
+        archivo.value = "";
+        boton.disabled = false;
+        boton.textContent = "Subir esquemas (.zip o .xsd)…";
+      }
+    };
+  }
+
+  document.querySelectorAll("[data-xsd-pagina]").forEach(b =>
+    b.onclick = async () => {
+      avisosXsd.pagina = Number(b.dataset.xsdPagina);
+      esquemas = await pedir(`/admin/vigilancia/xsd?pagina=${avisosXsd.pagina}`)
+        .catch(e => ({ error: e.message, detalle: e.detalle }));
+      pintar();
+    });
+}
+
+// ------------------------------------------------------ prueba de madrugada
+const NOMBRE_ESTADO = {
+  ok: "Aceptado", obs: "Aceptado con observaciones", mal: "Rechazado por SUNAT",
+  error_api: "Nuestra API no lo aceptó", caida: "SUNAT no respondió", pend: "Esperando respuesta"
+};
+
+// Cómo se lee el cambio respecto a la corrida anterior. «volvió a pasar» era
+// el texto de la primera versión: hacía pensar que el error seguía.
+const TEXTO_CAMBIO = {
+  "volvió a pasar": "ya funciona (antes falló)", "ya funciona": "ya funciona (antes falló)",
+  "ahora rechaza": "ahora falla", "nuestra API falla": "ahora falla en nuestra API",
+  "otro rechazo": "falla por otro motivo", "nueva observación": "observación nueva",
+  "igual": "igual que la anterior", "primera vez": "primera vez que se prueba",
+  "sin respuesta": "SUNAT no respondió"
+};
+const textoCambio = c => TEXTO_CAMBIO[c] || c;
+const claseCambio = k => k.estado === "ok" ? "sano" : k.estado === "obs" ? "atencion" : "problema";
+
+const diaCorto = v => new Date(v).toLocaleDateString("es-PE", { timeZone: "America/Lima", day: "numeric", month: "short" });
+
+// ------------------------------------------------ empresa de control (17 oct)
+const TIPO_SERIE = {
+  "01": "Factura", "03": "Boleta", "07": "Nota de crédito", "08": "Nota de débito",
+  "04": "Liquidación de compra", "20": "Retención", "40": "Percepción",
+  "09": "Guía de remisión", "31": "Guía del transportista"
+};
+
+// En palabras, lo que no salió verde ni está esperando: se lee aunque se
+// copie la pantalla como texto (los colores de las casillas no se copian).
+function revisarControl(m, casos) {
+  if (casos.length === 0) return "";
+  const nombre = clave => (m.definicion.find(d => d.clave === clave) || {}).nombre || clave;
+  const raros = casos.filter(k => !["ok", "obs", "pend"].includes(k.estado));
+  if (raros.length === 0)
+    return `<p class="nota-control" style="margin:0 0 12px"><b>Nada que revisar:</b> todo aceptado o esperando a SUNAT.</p>`;
+  const lista = raros.map(k => `${esc(nombre(k.caso))} — ${esc(NOMBRE_ESTADO[k.estado] || k.estado)}`).join(" · ");
+  const anulacion = raros.some(k => k.caso === "anular-boleta" && k.estado === "caida")
+    ? ` La anulación de boleta sale gris mientras la boleta que anula (la de la corrida anterior) no pase en su resumen del día siguiente: no es alarma.`
+    : "";
+  return `<p class="nota-control" style="margin:0 0 12px"><b>Revisar:</b> ${lista}.${anulacion}</p>`;
+}
+
+function bloqueControl(m, ultima) {
+  const boton = `<button class="mini" id="correr-madrugada" ${m.corriendo ? "disabled" : ""}>
+      ${m.corriendo ? "Corriendo…" : "Correr ahora"}</button>`;
+
+  const sencillo = `<p class="sencillo"><b>En palabras simples:</b> es una empresa de mentira que usamos para
+    vigilar a SUNAT. Cada madrugada emite los mismos comprobantes en el ambiente de pruebas; si un día SUNAT los
+    rechaza, es que cambió una regla, y nos enteramos antes que los clientes. No es un cliente: no factura de
+    verdad y no se puede cambiar.</p>`;
+
+  const nota = `<p class="nota-control">No aparece en la lista de Empresas ni suma en «Aceptados hoy», «En cola» ni
+    en la alarma de «sin aceptar» del Estado del servicio. Nunca pasa a producción.</p>`;
+
+  if (!m.preparada) {
+    return `<section class="control"><h2>Empresa de control</h2>${sencillo}
+      <div class="quien"><div>Todavía no existe: se crea sola la primera vez que corra la prueba
+        (RUC 20999999990). <span class="pildora">solo beta</span> <span class="pildora">solo lectura</span></div>${boton}</div>
+      ${nota}</section>`;
+  }
+
+  const casos = ultima ? m.casos.filter(k => k.pruebaId === ultima.id) : [];
+  const bien = casos.filter(k => k.estado === "ok" || k.estado === "obs").length;
+  const malos = casos.filter(k => k.estado === "mal" || k.estado === "error_api").length;
+  const esperando = casos.filter(k => k.estado === "pend").length;
+  const colorResultado = !ultima ? "" : malos > 0 ? "var(--problema)" : "var(--sano)";
+
+  const c = m.control || { series: [], certificadoVence: null };
+  let cert = "—";
+  if (c.certificadoVence) {
+    const dias = Math.ceil((new Date(c.certificadoVence) - Date.now()) / 86400000);
+    cert = dias < 0 ? "vencido" : `vence en ${dias} d`;
+  }
+
+  const tarjeta = (k, v, color) =>
+    `<div class="tarjeta"><div class="k">${k}</div><div class="v"${color ? ` style="color:${color}"` : ""}>${v}</div></div>`;
+
+  const filas = c.series.map(s => `<tr><td class="mono">${esc(s.serie)}</td>
+      <td>${esc(TIPO_SERIE[s.tipo] || s.tipo)}</td><td class="mono">${String(s.ultimo).padStart(8, "0")}</td></tr>`).join("");
+
+  return `
+    <section class="control">
+      <h2>Empresa de control</h2>
+      ${sencillo}
+      <div class="quien">
+        <div><b>${esc(m.empresa.razonSocial)}</b> <span class="mono">${esc(m.empresa.ruc)}</span>
+          <span class="pildora">solo beta</span> <span class="pildora">solo lectura</span></div>
+        ${boton}
+      </div>
+      <div class="tarjetas">
+        ${tarjeta("Última corrida", ultima ? `${diaCorto(ultima.iniciadaEn)}, ${horaCorta(ultima.iniciadaEn)}` : "todavía no")}
+        ${tarjeta("Resultado", ultima ? `${bien} de ${casos.length} bien` : "—", colorResultado)}
+        ${tarjeta("Esperando a SUNAT", esperando === 1 ? "1 comprobante" : `${esperando} comprobantes`)}
+        ${tarjeta("Certificado de prueba", cert)}
+      </div>
+      ${revisarControl(m, casos)}
+      ${filas ? `<div class="desplazable"><table><tr><th>Serie</th><th>Tipo</th><th>Último número</th></tr>${filas}</table></div>`
+              : `<p class="vacio">Sin series todavía.</p>`}
+      ${nota}
+    </section>`;
+}
+const horaCorta = v => new Date(v).toLocaleTimeString("es-PE", { timeZone: "America/Lima", hour: "2-digit", minute: "2-digit" });
+
+function seccionMadrugada() {
+  const m = madrugada;
+  if (!m) return "";
+
+  if (m.error) {
+    return `<section><h2>Prueba de madrugada</h2>
+      <p class="mal">${esc(m.error)} ${esc(m.detalle || "")}</p></section>`;
+  }
+
+  const corridas = [...m.corridas].reverse();          // de la más vieja a la más nueva
+  const ultima = corridas.at(-1);
+  const buscar = (corrida, caso) => m.casos.find(k => k.pruebaId === corrida && k.caso === caso);
+
+  // Si nadie eligió una casilla, se abre la que cambió en la última corrida.
+  if (!casoAbierto && ultima) {
+    const cambiada = m.casos.find(k => k.pruebaId === ultima.id && k.cambio &&
+                                       !["igual", "primera vez", "sin respuesta"].includes(k.cambio));
+    if (cambiada) casoAbierto = { corrida: ultima.id, caso: cambiada.caso };
+  }
+
+  const explicacion = m.preparada
+    ? `Todos los días a las ${esc(m.hora)} (hora de Lima) se envía a SUNAT beta un comprobante de cada tipo,
+       desde la empresa interna <b>${esc(m.empresa.razonSocial)}</b> (RUC ${esc(m.empresa.ruc)}), que nunca sale de beta.
+       Si SUNAT rechaza algo que la vez anterior aceptaba, llega un correo: es que cambió una regla.`
+    : `Todos los días a las ${esc(m.hora)} (hora de Lima) se envía a SUNAT beta un comprobante de cada tipo y se
+       compara con la vez anterior. La primera vez que corra, prepara sola una empresa interna
+       (RUC 20999999990), que nunca sale de beta ni gasta correlativos reales.`;
+
+  let cuerpo;
+
+  if (corridas.length === 0) {
+    cuerpo = `<p class="vacio">Todavía no corrió. Pulsa «Correr ahora» para verla funcionar sin esperar a la madrugada.</p>`;
+  } else {
+    const cabeza = corridas.map(c => `
+      <th class="noche" title="${esc(c.origen === "reloj" ? "Automática" : "Pedida por " + c.iniciadaPor)}">
+        ${diaCorto(c.iniciadaEn)}<div class="sub">${horaCorta(c.iniciadaEn)}</div>${c.origen === "reloj" ? "" : `<div class="sub">a mano</div>`}</th>`).join("");
+
+    const filas = m.definicion.map(d => {
+      const celdas = corridas.map(c => {
+        const k = buscar(c.id, d.clave);
+        if (!k) return `<td><span class="celda c-vacia" title="No se probó en esta corrida"></span></td>`;
+        const abierta = casoAbierto && casoAbierto.corrida === c.id && casoAbierto.caso === d.clave;
+        const nombre = NOMBRE_ESTADO[k.estado] || k.estado;
+        return `<td><button class="celda c-${esc(k.estado)}${abierta ? " abierta" : ""}" data-corrida="${c.id}"
+                  data-caso="${esc(d.clave)}" title="${esc(nombre)}" aria-label="${esc(d.nombre)}: ${esc(nombre)}"></button></td>`;
+      }).join("");
+
+      const k = ultima && buscar(ultima.id, d.clave);
+      const marca = k && k.cambio && !["igual", "primera vez", "sin respuesta"].includes(k.cambio)
+        ? ` <span class="pildora ${claseCambio(k)}">${esc(textoCambio(k.cambio))}</span>` : "";
+
+      return `<tr><td>${esc(d.nombre)}${marca}</td>${celdas}</tr>`;
+    }).join("");
+
+    cuerpo = `
+      <div class="desplazable"><table class="rejilla">
+        <tr><th>Caso</th>${cabeza}</tr>${filas}
+      </table></div>
+      <div class="leyenda" style="margin-top:12px">
+        <span><i style="background:var(--sano)"></i>Aceptado</span>
+        <span><i style="background:var(--atencion)"></i>Con observación</span>
+        <span><i style="background:var(--problema)"></i>Rechazado, o nuestra API no lo aceptó</span>
+        <span><i class="c-caida"></i>SUNAT no respondió (no es alarma)</span>
+        <span><i class="c-pend"></i>Esperando respuesta</span>
+      </div>
+      ${fichaMadrugada(buscar)}`;
+  }
+
+  // «Correr ahora» vive ahora en el bloque «Empresa de control», arriba.
+  return `
+    ${bloqueControl(m, ultima)}
+    <section>
+      <div class="cabecera-seccion">
+        <h2>Resultados</h2>
+      </div>
+      <p class="bajada">${explicacion}</p>
+      <p class="sencillo"><b>En palabras simples:</b> cada madrugada el sistema hace un simulacro: manda a SUNAT comprobantes de prueba, que no valen de verdad, para ver si los sigue aceptando. Verde quiere decir que todo está bien. Rojo quiere decir que SUNAT cambió algo, y te llega un correo antes de que les pase a tus clientes.</p>
+      ${cuerpo}
+    </section>`;
+}
+
+function fichaMadrugada(buscar) {
+  if (!casoAbierto) return `<p class="sub" style="margin:12px 0 0">Toca una casilla para ver qué se envió y qué dijo SUNAT.</p>`;
+
+  const k = buscar(casoAbierto.corrida, casoAbierto.caso);
+  const c = madrugada.corridas.find(x => x.id === casoAbierto.corrida);
+  const d = madrugada.definicion.find(x => x.clave === casoAbierto.caso);
+  if (!k || !c || !d) return "";
+
+  const pildora = { ok: "", obs: "atencion", mal: "problema", error_api: "problema" }[k.estado] ?? "";
+
+  return `
+    <div class="ficha">
+      <dl>
+        <dt>Caso</dt><dd><b>${esc(d.nombre)}</b></dd>
+        <dt>Corrida</dt><dd>${fecha(c.iniciadaEn)} · ${c.origen === "reloj" ? "automática" : "pedida por " + esc(c.iniciadaPor)}</dd>
+        <dt>Comprobante</dt><dd class="mono">${esc(k.numero || "—")}</dd>
+        <dt>Resultado</dt><dd><span class="pildora ${pildora}">${esc(NOMBRE_ESTADO[k.estado] || k.estado)}</span>
+          ${k.codigo ? ` <span class="mono">código ${esc(k.codigo)}</span>` : ""}</dd>
+        <dt>Qué dijo</dt><dd>${esc(k.mensaje || "—")}</dd>
+        <dt>Contra la anterior</dt><dd>${esc(k.cambio ? textoCambio(k.cambio) : "todavía no se compara")}</dd>
+      </dl>
+    </div>`;
+}
+
+function enlazarMadrugada() {
+  document.querySelectorAll("[data-corrida]").forEach(b => b.onclick = () => {
+    casoAbierto = { corrida: Number(b.dataset.corrida), caso: b.dataset.caso };
+    pintar();
+  });
+
+  const boton = elem("correr-madrugada");
+  if (boton) boton.onclick = async () => {
+    boton.disabled = true;
+    boton.textContent = "Corriendo…";
+    try {
+      const r = await pedir("/admin/vigilancia/madrugada/correr", { method: "POST" });
+      avisar("Prueba en marcha", r.mensaje, "ok");
+      setTimeout(cargar, 4000);
+    } catch (e) {
+      avisar(e.message, e.detalle, "mal");
+      boton.disabled = false;
+      boton.textContent = "Correr ahora";
+    }
+  };
+
+  // Mientras corre, la pantalla se actualiza sola cada 15 segundos.
+  clearTimeout(relojPantalla);
+  if (madrugada && madrugada.corriendo) relojPantalla = setTimeout(cargar, 15000);
+}
+
+// --------------------------------------------------------------- revisado
+let enRevision = null;
+
+function abrirRevisado(codigo, clase) {
+  enRevision = { codigo, clase };
+  elem("titulo-revisado").textContent =
+    `Marcar revisado el código ${codigo} (${clase === "observacion" ? "observación" : "respuesta"})`;
+  elem("nota-revisado").value = "";
+  elem("error-revisado").hidden = true;
+  elem("velo-revisado").hidden = false;
+  elem("nota-revisado").focus();
+}
+
+elem("cancelar-revisado").onclick = () => { elem("velo-revisado").hidden = true; };
+
+elem("guardar-revisado").onclick = async () => {
+  const nota = elem("nota-revisado").value.trim();
+  if (nota.length < 5) {
+    elem("error-revisado").textContent = "Escribe una nota de al menos 5 caracteres.";
+    elem("error-revisado").hidden = false;
+    return;
+  }
+  const boton = elem("guardar-revisado");
+  boton.disabled = true;
+  try {
+    const r = await pedir("/admin/vigilancia/revisado", {
+      method: "POST", body: JSON.stringify({ ...enRevision, nota }) });
+    elem("velo-revisado").hidden = true;
+    avisar(r.mensaje, "", "ok");
+    await cargar();
+  } catch (e) {
+    elem("error-revisado").textContent = `${e.message} ${e.detalle || ""}`;
+    elem("error-revisado").hidden = false;
+  } finally {
+    boton.disabled = false;
+  }
+};
+
+// ---------------------------------------------------------------- correos
+async function agregarCorreo(evento) {
+  evento.preventDefault();
+  const correo = elem("nuevo-correo").value.trim();
+  if (!correo) { elem("nuevo-correo").focus(); return; }
+  try {
+    const r = await pedir("/admin/vigilancia/correos", { method: "POST", body: JSON.stringify({ correo }) });
+    avisar(r.mensaje, "", "ok");
+    await cargar();
+  } catch (e) {
+    avisar(e.message, e.detalle, "mal");
+  }
+}
+
+let porQuitar = null;
+
+function abrirQuitar(id, correo) {
+  porQuitar = id;
+  elem("texto-quitar").textContent =
+    `${correo} dejará de recibir las alertas. Queda anotado quién lo quitó y cuándo.`;
+  elem("velo-quitar").hidden = false;
+}
+
+elem("cancelar-quitar").onclick = () => { elem("velo-quitar").hidden = true; };
+
+elem("confirmar-quitar").onclick = async () => {
+  const boton = elem("confirmar-quitar");
+  boton.disabled = true;
+  try {
+    const r = await pedir(`/admin/vigilancia/correos/${porQuitar}/quitar`, { method: "POST" });
+    elem("velo-quitar").hidden = true;
+    avisar(r.mensaje, "", "ok");
+    await cargar();
+  } catch (e) {
+    avisar(e.message, e.detalle, "mal");
+  } finally {
+    boton.disabled = false;
+  }
+};
+
+async function probarCorreo() {
+  const boton = elem("probar-correo");
+  boton.disabled = true;
+  boton.textContent = "Enviando…";
+  try {
+    const r = await pedir("/admin/vigilancia/probar-correo", { method: "POST" });
+    avisar("Correo de prueba enviado", r.mensaje, "ok");
+  } catch (e) {
+    avisar(e.message, e.detalle, "mal");
+  } finally {
+    boton.disabled = false;
+    boton.textContent = "Enviar correo de prueba";
+  }
+}
+
+// ------------------------------------------------------------ revisar ya
+elem("revisar").onclick = async () => {
+  const boton = elem("revisar");
+  boton.disabled = true;
+  boton.textContent = "Revisando…";
+  try {
+    const r = await pedir("/admin/vigilancia/revisar", { method: "POST" });
+    avisar(r.mensaje, "", r.alertasCreadas > 0 ? "mal" : "ok");
+    await cargar();
+  } catch (e) {
+    avisar(e.message, e.detalle, "mal");
+  } finally {
+    boton.disabled = false;
+    boton.textContent = "Revisar ahora";
+  }
+};
+
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") { elem("velo-revisado").hidden = true; elem("velo-quitar").hidden = true; }
+});
+
+elem("actualizar").onclick = cargar;
+
+cargarUsuario().then(ok => { if (ok) cargar(); });
+</script>
+<script src="/menu-lateral.js"></script>
+</body>
+</html>

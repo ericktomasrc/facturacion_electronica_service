@@ -642,6 +642,30 @@ public sealed class RepositorioResumenes
         await transaccion.CommitAsync(ct);
     }
 
+    /// <summary>
+    /// SUNAT perdió el ticket (0127): el resumen vuelve a ENCOLADO sin ticket,
+    /// con sus mismas boletas, y el Worker lo envía otra vez (17 oct). Solo si
+    /// sigue ENVIADO: si otro proceso ya lo cerró, no se toca.
+    /// </summary>
+    public async Task ReenviarSinTicketAsync(
+        Guid resumenId, string mensaje, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+
+        await conexion.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE resumenes
+               SET estado = 'ENCOLADO',
+                   ticket = NULL,
+                   intentos_fallidos = 0,
+                   proximo_intento_en = now() + interval '1 minute',
+                   mensaje_sunat = @mensaje
+             WHERE id = @resumenId
+               AND estado = 'ENVIADO'
+            """,
+            new { resumenId, mensaje }, cancellationToken: ct));
+    }
+
     /// <summary>Programa un reintento con espera creciente.</summary>
     public async Task ProgramarReintentoAsync(
         Guid resumenId, TimeSpan espera, string? mensaje = null,

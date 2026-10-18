@@ -260,6 +260,14 @@ public class LineaComprobante
     public int Numero { get; set; }
 
     public string CodigoProducto { get; set; } = "";
+
+    /// <summary>
+    /// El código de producto SUNAT (catálogo 25, UNSPSC): 8 dígitos de una
+    /// lista oficial. Opcional; obligatorio en la liquidación de compra desde
+    /// 2027. Ver <see cref="Facturacion.Cpe.CodigoProductoSunat"/>.
+    /// </summary>
+    public string? CodigoProductoSunat { get; set; }
+
     public string Descripcion { get; set; } = "";
 
     /// <summary>Catálogo 65. "NIU" = unidad, "ZZ" = servicio.</summary>

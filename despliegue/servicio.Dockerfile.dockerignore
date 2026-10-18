@@ -1,0 +1,22 @@
+# Lo que NO entra al construir el servicio. Una imagen es un archivo que se
+# copia y se reparte: lo que una capa copió queda ahí para siempre.
+**/.env
+**/.env.*
+**/*.pfx
+**/*.p12
+**/clave.txt
+**/*.bak
+**/*.dump
+**/*.sql.gz
+**/launchSettings.json
+**/bin/
+**/obj/
+**/TestResults/
+**/.vs/
+**/.vscode/
+**/.idea/
+.git/
+migraciones/
+despliegue/
+Facturacion.Consola/
+Facturacion.Cpe.Tests/

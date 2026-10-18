@@ -187,8 +187,9 @@ public sealed record EstadoEmisor(
 /// solo puede leer. Lo que la acota es que el único método que una clave de
 /// alta puede disparar es <see cref="CrearEmisorAsync"/>, y ese método solo
 /// inserta —salvo dar por abandonado un «sin confirmar» que creó otra clave de
-/// alta—. La segunda barrera, un rol de base propio que solo pueda insertar en
-/// estas tablas, es el punto 23, para antes de producción.
+/// alta—. La segunda barrera es el rol de base propio (punto 23, migración
+/// 034): la ruta /alta entra con facturacion_alta, que solo puede tocar
+/// claves_alta, tenants, api_keys, webhooks y webhook_cambios.
 /// </summary>
 public sealed class RepositorioAltas
 {
@@ -208,10 +209,27 @@ public sealed class RepositorioAltas
 
     private readonly string _cadenaOperador;
 
-    public RepositorioAltas(string cadenaConexionOperador)
+    // PUNTO 23: la ruta /alta (resolver la alt_ y crear el emisor) va con el rol
+    // facturacion_alta. Null = sin configurar: usa el operador (solo desarrollo).
+    private readonly string? _cadenaAlta;
+
+    public RepositorioAltas(string cadenaConexionOperador) : this(cadenaConexionOperador, null) { }
+
+    public RepositorioAltas(string cadenaConexionOperador, string? cadenaConexionAlta)
     {
         _cadenaOperador = cadenaConexionOperador
             ?? throw new ArgumentNullException(nameof(cadenaConexionOperador));
+        _cadenaAlta = cadenaConexionAlta;
+    }
+
+    /// <summary>¿La ruta de alta usa su propio rol (punto 23)?</summary>
+    public bool ConRolPropio => _cadenaAlta is not null;
+
+    private async Task<NpgsqlConnection> AbrirAltaAsync(CancellationToken ct)
+    {
+        var conexion = new NpgsqlConnection(_cadenaAlta ?? _cadenaOperador);
+        await conexion.OpenAsync(ct);
+        return conexion;
     }
 
     private async Task<NpgsqlConnection> AbrirAsync(CancellationToken ct)
@@ -321,7 +339,7 @@ public sealed class RepositorioAltas
         if (string.IsNullOrWhiteSpace(clave) || !clave.StartsWith("alt_", StringComparison.Ordinal))
             return null;
 
-        await using var conexion = await AbrirAsync(ct);
+        await using var conexion = await AbrirAltaAsync(ct);
 
         return await conexion.QuerySingleOrDefaultAsync<ClaveAltaResuelta>(new CommandDefinition(
             """
@@ -368,7 +386,7 @@ public sealed class RepositorioAltas
     public async Task<AltaEmisor> CrearEmisorAsync(
         ClaveAltaResuelta clave, DatosAltaEmisor datos, CancellationToken ct = default)
     {
-        await using var conexion = await AbrirAsync(ct);
+        await using var conexion = await AbrirAltaAsync(ct);
         await using var transaccion = await conexion.BeginTransactionAsync(ct);
 
         // --- 1. El tope del día --------------------------------------------
@@ -495,8 +513,8 @@ public sealed class RepositorioAltas
         var webhookId = await conexion.ExecuteScalarAsync<Guid>(new CommandDefinition(
             """
             INSERT INTO webhooks
-                   (tenant_id, nombre, url, secreto, eventos, origen, secreto_cambiado_en)
-            VALUES (@tenantId, @nombre, @url, @secreto, '{}', 'api', now())
+                   (tenant_id, nombre, url, secreto_cifrado, eventos, origen, secreto_cambiado_en)
+            VALUES (@tenantId, @nombre, @url, @secretoCifrado, '{}', 'api', now())
             RETURNING id
             """,
             new
@@ -504,7 +522,9 @@ public sealed class RepositorioAltas
                 tenantId = creado.Id,
                 nombre = RepositorioWebhookApi.NombreWebhook,
                 url = datos.WebhookUrl,
-                secreto
+
+                // CIFRADO (migración 032): en la base no queda en claro.
+                secretoCifrado = SecretosWebhook.Cifrar(secreto)
             },
             transaccion, cancellationToken: ct));
 

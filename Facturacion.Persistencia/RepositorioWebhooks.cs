@@ -112,6 +112,58 @@ public sealed class RepositorioWebhooks
         "whsec_" + Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
             .Replace("+", "").Replace("/", "").Replace("=", "");
 
+    private sealed record SecretoEnClaro(Guid Id, string Secreto);
+
+    /// <summary>
+    /// Cifra los secretos que quedaron en claro de antes de la 032 (llena
+    /// `secreto_cifrado`). La API lo hace al arrancar. NO borra la copia en
+    /// claro: eso se hace a mano, cuando se comprobó que los avisos siguen
+    /// llegando bien firmados. Devuelve cuántos cifró.
+    /// </summary>
+    public async Task<int> CifrarSecretosEnClaroAsync(CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+
+        var filas = (await conexion.QueryAsync<SecretoEnClaro>(new CommandDefinition(
+            """
+            SELECT id AS "Id", secreto AS "Secreto"
+              FROM webhooks
+             WHERE secreto IS NOT NULL
+               AND secreto_cifrado IS NULL
+            """,
+            cancellationToken: ct))).ToList();
+
+        var cifrados = 0;
+
+        foreach (var f in filas)
+        {
+            cifrados += await conexion.ExecuteAsync(new CommandDefinition(
+                """
+                UPDATE webhooks
+                   SET secreto_cifrado = @cifrado
+                 WHERE id = @id
+                   AND secreto_cifrado IS NULL
+                """,
+                new { id = f.Id, cifrado = SecretosWebhook.Cifrar(f.Secreto) },
+                cancellationToken: ct));
+        }
+
+        return cifrados;
+    }
+
+    /// <summary>
+    /// Cuántos webhooks tienen todavía la copia en claro aunque ya estén
+    /// cifrados: los que se pueden vaciar a mano.
+    /// </summary>
+    public async Task<int> ContarEnClaroAsync(CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+
+        return await conexion.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT count(*)::int FROM webhooks WHERE secreto IS NOT NULL",
+            cancellationToken: ct));
+    }
+
     // ------------------------------------------------------- configuración
 
     public async Task<IReadOnlyList<WebhookAdmin>> ListarAsync(
@@ -167,13 +219,16 @@ public sealed class RepositorioWebhooks
 
         await using var conexion = await AbrirAsync(ct);
 
+        // CIFRADO (migración 032): en la base no queda el secreto en claro.
+        var secretoCifrado = SecretosWebhook.Cifrar(secreto);
+
         var id = await conexion.ExecuteScalarAsync<Guid>(new CommandDefinition(
             """
-            INSERT INTO webhooks (tenant_id, nombre, url, secreto, eventos)
-            VALUES (@tenantId, @nombre, @url, @secreto, @eventos)
+            INSERT INTO webhooks (tenant_id, nombre, url, secreto_cifrado, eventos)
+            VALUES (@tenantId, @nombre, @url, @secretoCifrado, @eventos)
             RETURNING id
             """,
-            new { tenantId, nombre, url, secreto, eventos },
+            new { tenantId, nombre, url, secretoCifrado, eventos },
             cancellationToken: ct));
 
         return (id, secreto);
@@ -337,7 +392,11 @@ public sealed class RepositorioWebhooks
                        t.tipo         AS "Tipo",
                        t.cuerpo::text AS "Cuerpo",
                        w.url          AS "Url",
-                       w.secreto      AS "Secreto",
+                       -- 032: el cifrado, marcado para SecretosWebhook.Leer;
+                       -- si es un webhook de antes sin cifrar, el de en claro.
+                       CASE WHEN w.secreto_cifrado IS NOT NULL
+                            THEN 'cifrado:' || encode(w.secreto_cifrado, 'hex')
+                            ELSE w.secreto END AS "Secreto",
                        t.intentos     AS "Intentos"
                   FROM tomadas t
                   JOIN webhooks w ON w.id = t.webhook_id
@@ -347,7 +406,43 @@ public sealed class RepositorioWebhooks
 
         await transaccion.CommitAsync(ct);
 
-        return entregas.ToList();
+        // El Worker firma con el secreto en claro: se descifra aquí, en
+        // memoria, y no sale de este proceso.
+        //
+        // UNA POR UNA: si una no se puede descifrar (llave maestra distinta o
+        // dato alterado), esa se aparta 15 minutos con el motivo y SIN gastarle
+        // el intento, y las demás salen igual. Que una falle no puede parar los
+        // avisos de todas las empresas.
+        var listas = new List<EntregaPendiente>();
+
+        foreach (var e in entregas)
+        {
+            try
+            {
+                listas.Add(e with { Secreto = SecretosWebhook.Leer(e.Secreto) });
+            }
+            catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException
+                                           or InvalidOperationException or FormatException)
+            {
+                await conexion.ExecuteAsync(new CommandDefinition(
+                    """
+                    UPDATE webhook_entregas
+                       SET intentos = GREATEST(intentos - 1, 0),
+                           ultimo_error = @error,
+                           proximo_intento_en = now() + interval '15 minutes'
+                     WHERE id = @id
+                    """,
+                    new
+                    {
+                        id = e.Id,
+                        error = "No se pudo descifrar el secreto del webhook (032): " +
+                                (ex.Message.Length > 300 ? ex.Message[..300] : ex.Message)
+                    },
+                    cancellationToken: ct));
+            }
+        }
+
+        return listas;
     }
 
     public async Task MarcarEntregadaAsync(

@@ -1,0 +1,7 @@
+# Los secretos del despliegue NUNCA entran en git.
+.env
+.env.*
+!.env.ejemplo
+!.env.servicio.ejemplo
+!.env.plataforma.ejemplo
+respaldos/

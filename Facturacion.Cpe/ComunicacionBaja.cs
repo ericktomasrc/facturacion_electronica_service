@@ -209,15 +209,19 @@ public static class ReglasBaja
     ];
 
     /// <summary>
-    /// Los tipos que admite un resumen de REVERSIONES (RR): solo estos dos.
+    /// Los tipos que admite un resumen de REVERSIONES (RR): retención (20),
+    /// percepción (40) y liquidación de compra (04).
     ///
-    /// La liquidación de compra (04) NO está, y no por olvido: no se pudo
-    /// determinar por cuál de las dos vías se anula. Ni el anexo de SUNAT ni
-    /// las fuentes consultadas lo dicen. Antes de añadirla aquí hay que
-    /// confirmarlo, porque meterla en la comunicación equivocada rechaza el
-    /// envío entero.
+    /// LA LIQUIDACIÓN SE AGREGÓ EL 14 DE OCTUBRE DE 2026. Antes no se sabía
+    /// por cuál vía se anulaba; las Reglas de validación de SUNAT (hoja
+    /// «Resumen de reversiones», regla 2308) admiten "20", "40" y "04", con
+    /// serie L### (2345) y cinco días de plazo desde el CDR (2958, vigente
+    /// desde el 01/08/2026).
     /// </summary>
-    private static readonly string[] TiposDeReversion = ["20", "40"];
+    private static readonly string[] TiposDeReversion = ["20", "40", "04"];
+
+    /// <summary>Días para revertir una liquidación de compra (error 2958).</summary>
+    public const int DiasParaRevertirLiquidacion = 5;
 
     private static string[] TiposAdmitidosDe(string tipoComunicacion) =>
         tipoComunicacion == TipoComunicacionBaja.Reversion
@@ -244,8 +248,8 @@ public static class ReglasBaja
         {
             problemas.Add(
                 $"El tipo de comunicacion '{b.Tipo}' no existe. Solo hay dos: " +
-                $"'RA' para facturas y notas, y 'RR' para retenciones y " +
-                $"percepciones.");
+                $"'RA' para facturas y notas, y 'RR' para retenciones, " +
+                $"percepciones y liquidaciones de compra.");
 
             return problemas;
         }
@@ -303,8 +307,18 @@ public static class ReglasBaja
                         $"La linea {l.Orden} es un documento de tipo " +
                         $"'{l.TipoComprobante}' ({l.NumeroCompleto}) y un resumen " +
                         $"de reversiones solo admite comprobantes de retencion " +
-                        $"(20) y de percepcion (40). Una factura o una nota se " +
-                        $"anulan con una comunicacion de baja (error 2308).");
+                        $"(20), de percepcion (40) y liquidaciones de compra (04). " +
+                        $"Una factura o una nota se anulan con una comunicacion " +
+                        $"de baja (error 2308).");
+                }
+                else if (l.TipoComprobante == "04")
+                {
+                    problemas.Add(
+                        $"La linea {l.Orden} es una liquidacion de compra " +
+                        $"({l.NumeroCompleto}). No se da de baja: se anula con un " +
+                        $"resumen de reversiones, dentro de los " +
+                        $"{DiasParaRevertirLiquidacion} dias desde que SUNAT la " +
+                        $"acepto (error 2958).");
                 }
                 else if (l.TipoComprobante is "20" or "40")
                 {
@@ -386,6 +400,24 @@ public static class ReglasBaja
         // que inventar una fecha de corte a partir de la emision bloquearia
         // reversiones validas. Se deja pasar y decide SUNAT.
 
+        // LA LIQUIDACION DE COMPRA SI TIENE PLAZO EN EL RR: cinco dias desde el
+        // CDR que la acepto (2958). Aqui solo se conoce la fecha de emision, y
+        // el CDR llega ese dia o despues: por eso es un AVISO y no un error.
+        // Un error bloquearia reversiones que todavia estan en plazo.
+        if (esReversion && b.Lineas.Any(l => l.TipoComprobante == "04"))
+        {
+            var limiteLiq = b.FechaReferencia.Date.AddDays(DiasParaRevertirLiquidacion);
+
+            if (RelojPeru.Hoy > limiteLiq)
+            {
+                problemas.Add(
+                    $"Aviso: las liquidaciones de compra se emitieron el " +
+                    $"{b.FechaReferencia:yyyy-MM-dd} y SUNAT da {DiasParaRevertirLiquidacion} " +
+                    $"dias desde que las acepto para revertirlas. Si ya pasaron, " +
+                    $"rechazara con el error 2958.");
+            }
+        }
+
         if (!esReversion)
         {
             var limite = b.FechaReferencia.Date.AddDays(DiasParaDarDeBaja);
@@ -427,6 +459,7 @@ public static class ReglasBaja
         "01" or "07" or "08" => 'F',
         "20" => 'R',
         "40" => 'P',
+        "04" => 'L',
         _ => null
     };
 

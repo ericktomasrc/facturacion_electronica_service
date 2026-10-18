@@ -69,6 +69,27 @@
   .alertas { margin:0; padding-left:20px; }
   .alertas li { margin:5px 0; }
 
+  /* Estado del servicio (14 oct): las tarjetas arriba, el estado debajo. */
+  .tarjeta { border:1px solid transparent; }
+  .tarjeta .valor { font-variant-numeric:tabular-nums; }
+  .tarjeta .pista { color:var(--tenue); font-size:12px; margin-top:2px; opacity:.85; }
+  .tarjeta.sano .valor { color:var(--sano); }
+  .tarjeta.atencion { border-color:var(--atencion); }
+  .tarjeta.atencion .valor { color:var(--atencion); }
+  .tarjeta.problema { border-color:var(--problema); }
+  .tarjeta.problema .valor { color:var(--problema); }
+  section.semaforo { display:block; padding:16px 18px; }
+  section.semaforo.Sano { border-left:4px solid var(--sano); }
+  section.semaforo.Atencion { border-left:4px solid var(--atencion); }
+  section.semaforo.Problema { border-left:4px solid var(--problema); }
+  .cabeza-estado { display:flex; align-items:center; gap:12px; }
+  .detalle-estado { color:var(--tenue); font-size:13.5px; }
+  .semaforo .alertas { list-style:none; padding:0; margin:14px 0 0; display:grid; gap:8px; }
+  .semaforo .alertas li { margin:0; padding:10px 12px; border-radius:8px; background:var(--sutil);
+                          border-left:3px solid var(--borde); }
+  .Atencion .alertas li { border-left-color:var(--atencion); }
+  .Problema .alertas li { border-left-color:var(--problema); }
+
   .tarjetas { display:grid;
     grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
     gap:12px; margin-bottom:18px; }
@@ -177,6 +198,7 @@ const PANTALLAS = [
   { url:"/diagnostico.html", texto:"Estado del servicio", permiso:"diagnostico.ver" },
   { url:"/admin.html",       texto:"Empresas",            permiso:"empresas.ver" },
   { url:"/comprobantes.html",texto:"Comprobantes",        permiso:"comprobantes.ver" },
+  { url:"/vigilancia.html",  texto:"Vigilancia SUNAT",    permiso:"diagnostico.ver" },
   { url:"/usuarios.html",    texto:"Usuarios",            permiso:"usuarios.gestionar" },
   { url:"/cuenta.html",      texto:"Mi cuenta",           permiso:null }
 ];
@@ -277,24 +299,42 @@ async function cargar() {
 function pintar(d) {
   const partes = [];
 
-  partes.push(`
-    <div class="semaforo ${d.nivel}">
-      <span class="punto"></span>
-      <div>
-        <div class="etiqueta">${textoNivel(d.nivel)}</div>
-        <ul class="alertas">${d.alertas.map(a => `<li>${escapar(a)}</li>`).join("")}</ul>
-      </div>
-    </div>`);
+  // PRIMERO LOS NÚMEROS, que se leen de un vistazo; debajo, el estado general
+  // con su lista de avisos, que puede ser larga (14 oct). Cada tarjeta se
+  // pinta de su color cuando pide atención.
+  const tasa = d.hoy.tasaExito;
 
   partes.push(`
     <div class="tarjetas">
-      ${tarjeta(d.cola.pendientes, "En cola")}
-      ${tarjeta(d.cola.esperandoReintento, "Esperando reintento")}
-      ${tarjeta(d.cola.requierenRevision, "Requieren revisión")}
-      ${tarjeta(d.hoy.aceptados, "Aceptados hoy")}
-      ${tarjeta(d.hoy.rechazados, "Rechazados hoy")}
-      ${tarjeta(d.hoy.tasaExito + "%", "Tasa de éxito")}
+      ${tarjeta(d.cola.pendientes, "En cola", "por enviar a SUNAT",
+                d.cola.pendientes > 100 ? "atencion" : "")}
+      ${tarjeta(d.cola.esperandoReintento, "Esperando reintento", "fallaron; se reintentan solos",
+                d.cola.esperandoReintento > 0 ? "atencion" : "")}
+      ${tarjeta(d.cola.requierenRevision, "Requieren revisión", "no van a salir solos",
+                d.cola.requierenRevision > 0 ? "problema" : "")}
+      ${tarjeta(d.hoy.aceptados, "Aceptados hoy", "por SUNAT",
+                d.hoy.aceptados > 0 ? "sano" : "")}
+      ${tarjeta(d.hoy.rechazados, "Rechazados hoy", "necesitan un comprobante nuevo",
+                d.hoy.rechazados > 0 ? "problema" : "")}
+      ${tarjeta(tasa + "%", "Tasa de éxito", "aceptados entre los de hoy",
+                tasa < 80 ? "problema" : tasa < 95 ? "atencion" : "sano")}
     </div>`);
+
+  const sinAvisos = d.alertas.length === 1 && d.alertas[0] === "Todo en orden.";
+
+  partes.push(`
+    <section class="semaforo ${d.nivel}">
+      <div class="cabeza-estado">
+        <span class="punto"></span>
+        <div>
+          <div class="etiqueta">${textoNivel(d.nivel)}</div>
+          <div class="detalle-estado">${sinAvisos
+            ? "No hay nada que atender."
+            : d.alertas.length === 1 ? "Hay 1 cosa que atender:" : `Hay ${d.alertas.length} cosas que atender:`}</div>
+        </div>
+      </div>
+      ${sinAvisos ? "" : `<ul class="alertas">${d.alertas.map(a => `<li>${escapar(a)}</li>`).join("")}</ul>`}
+    </section>`);
 
   if (d.certificados.length) {
     partes.push(seccion("Certificados", `
@@ -370,8 +410,10 @@ async function reprocesar(id, boton) {
   }
 }
 
-const tarjeta = (valor, nombre) =>
-  `<div class="tarjeta"><div class="valor">${valor}</div><div class="nombre">${nombre}</div></div>`;
+const tarjeta = (valor, nombre, pista = "", estado = "") =>
+  `<div class="tarjeta ${estado}"><div class="valor">${valor}</div>` +
+  `<div class="nombre">${nombre}</div>` +
+  (pista ? `<div class="pista">${pista}</div>` : "") + `</div>`;
 
 const seccion = (titulo, contenido) =>
   `<section><h2>${titulo}</h2>${contenido}</section>`;
@@ -387,5 +429,6 @@ const escapar = t => String(t ?? "").replace(/[&<>"']/g,
 
 cargarUsuario().then(ok => { if (ok) cargar(); });
 </script>
+<script src="/menu-lateral.js"></script>
 </body>
 </html>

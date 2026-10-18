@@ -105,7 +105,9 @@ public sealed class AutenticacionApiKey
         // que no sea GET responde 423, salvo la ruta que quita la pausa.
         if (!HttpMethods.IsGet(contexto.Request.Method) &&
             !HttpMethods.IsHead(contexto.Request.Method) &&
-            !contexto.Request.Path.StartsWithSegments("/v1/configuracion/pausa"))
+            !contexto.Request.Path.StartsWithSegments("/v1/configuracion/pausa") &&
+            // Revocar la propia clave no emite nada: se puede siempre (punto 21).
+            !contexto.Request.Path.StartsWithSegments("/v1/clave/revocar"))
         {
             var admin = contexto.RequestServices.GetRequiredService<RepositorioAdmin>();
             if (await admin.EmisionPausadaAsync(tenant.Id, contexto.RequestAborted))

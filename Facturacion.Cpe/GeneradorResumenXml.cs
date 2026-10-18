@@ -28,15 +28,11 @@ namespace Facturacion.Cpe;
 ///    con el mismo código de tributo, y el XSD espera bloques hermanos: uno
 ///    para el IGV, otro para el ICBPER, otro para las gratuitas.
 ///
-/// 2. LAS GRATUITAS VAN TODAS JUNTAS, en el código 05 del catálogo 11. En la
-///    factura cada clase tiene su afectación propia; aquí el resumen solo
-///    quiere saber cuánto se entregó sin cobrar, no de qué clase era.
-///
-///    ESTO ESTUVO MAL Y SUNAT LO RECHAZÓ con el error 2256: se emitían
-///    cuatro códigos —06 gravada, 07 exonerada, 08 inafecta, 09
-///    exportación— que sencillamente no existen. El catálogo 11 entero son
-///    cinco valores: 01 gravadas, 02 exoneradas, 03 inafectas, 04
-///    exportación y 05 gratuitas. No hay más.
+/// 2. LAS GRATUITAS: hasta que rigen las reglas de 2027 van todas juntas, en
+///    el código 05 del catálogo 11 (mandar 06–09 antes era el error 2256).
+///    Desde entonces SUNAT desactiva el 05 y pide cada clase con su código:
+///    06 gravadas, 07 exoneradas, 08 inafectas, 09 exportación. Ver
+///    VigenciaSunat y TipoMontoResumen.
 ///
 /// 3. LA PERCEPCIÓN NO ES UN AllowanceCharge sino un nodo propio de SUNAT,
 ///    con otros nombres y siempre en soles.
@@ -81,7 +77,7 @@ public static class GeneradorResumenXml
         );
 
         foreach (var linea in r.Lineas.OrderBy(l => l.Orden))
-            raiz.Add(BloqueLinea(linea));
+            raiz.Add(BloqueLinea(linea, r.FechaGeneracion));
 
         return new XDocument(new XDeclaration("1.0", "UTF-8", null), raiz);
     }
@@ -97,7 +93,7 @@ public static class GeneradorResumenXml
     ///
     /// La percepción va ANTES del estado, que es donde menos se la espera.
     /// </summary>
-    private static XElement BloqueLinea(LineaResumen l)
+    private static XElement BloqueLinea(LineaResumen l, DateTime fechaGeneracion)
     {
         var nodo = new XElement(Sac + "SummaryDocumentsLine",
             new XElement(Ns.Cbc + "LineID", l.Orden),
@@ -157,19 +153,40 @@ public static class GeneradorResumenXml
         if (l.TotalExportacion > 0)
             nodo.Add(Monto(l.Moneda, l.TotalExportacion, TipoMontoResumen.Exportacion));
 
-        // LAS GRATUITAS VAN EN UN SOLO IMPORTE, con el código 05.
+        // LAS GRATUITAS: UN SOLO IMPORTE HASTA 2027, DESGLOSADAS DESDE 2027.
         //
-        // El desglose por clase que hace LineaResumen sigue existiendo y
-        // sigue siendo útil —el PDF y el panel lo aprovechan— pero el
-        // resumen no tiene dónde ponerlo: el catálogo 11 no distingue entre
-        // una bonificación gravada y una muestra médica inafecta. Suma las
-        // cuatro y declara una sola cifra.
-        var gratuitas =
-            l.TotalGratuitoGravado + l.TotalGratuitoExonerado +
-            l.TotalGratuitoInafecto + l.TotalGratuitoExportacion;
+        // Hasta que rigen las reglas de 2027, el catálogo 11 solo tiene el 05:
+        // se suman las cuatro clases y se declara una cifra. Desde entonces
+        // SUNAT desactiva el 05 y pide cada clase con su código (06 gravadas,
+        // 07 exoneradas, 08 inafectas, 09 exportación). El desglose ya lo
+        // hacía LineaResumen; ahora también se declara.
+        //
+        // Lo decide la fecha de GENERACIÓN del resumen, que es la que SUNAT
+        // ve al recibirlo: un resumen generado el 2 de enero con boletas del
+        // 31 de diciembre ya va con las reglas nuevas.
+        if (VigenciaSunat.Rigen2027(fechaGeneracion))
+        {
+            if (l.TotalGratuitoGravado > 0)
+                nodo.Add(Monto(l.Moneda, l.TotalGratuitoGravado, TipoMontoResumen.GratuitasGravadas));
 
-        if (gratuitas > 0)
-            nodo.Add(Monto(l.Moneda, gratuitas, TipoMontoResumen.Gratuitas));
+            if (l.TotalGratuitoExonerado > 0)
+                nodo.Add(Monto(l.Moneda, l.TotalGratuitoExonerado, TipoMontoResumen.GratuitasExoneradas));
+
+            if (l.TotalGratuitoInafecto > 0)
+                nodo.Add(Monto(l.Moneda, l.TotalGratuitoInafecto, TipoMontoResumen.GratuitasInafectas));
+
+            if (l.TotalGratuitoExportacion > 0)
+                nodo.Add(Monto(l.Moneda, l.TotalGratuitoExportacion, TipoMontoResumen.GratuitasExportacion));
+        }
+        else
+        {
+            var gratuitas =
+                l.TotalGratuitoGravado + l.TotalGratuitoExonerado +
+                l.TotalGratuitoInafecto + l.TotalGratuitoExportacion;
+
+            if (gratuitas > 0)
+                nodo.Add(Monto(l.Moneda, gratuitas, TipoMontoResumen.Gratuitas));
+        }
 
         // --- Otros cargos -----------------------------------------------------
 

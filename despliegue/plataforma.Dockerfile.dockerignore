@@ -1,0 +1,18 @@
+# Lo que NO entra al construir la plataforma.
+**/.env
+**/.env.*
+**/*.pfx
+**/*.p12
+**/clave.txt
+**/*.bak
+**/*.dump
+**/launchSettings.json
+**/node_modules/
+**/dist/
+**/bin/
+**/obj/
+**/.vs/
+**/.vscode/
+**/.git/
+**/migraciones/
+**/wwwroot/

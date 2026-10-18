@@ -71,6 +71,11 @@ builder.Services.AddSingleton(new OpcionesWorker
 // compartirse entre todos los lotes, no reiniciarse en cada vuelta.
 builder.Services.AddSingleton(new SemaforoPorTenant(limitePorDefecto: 1));
 
+// ESQUEMAS XSD (migración 033): los que se suben en el panel se copian a la
+// carpeta de esquemas cada dos minutos, y los avisos se anotan para la pestaña.
+builder.Services.AddSingleton(new RepositorioXsd(cadenaOperador));
+builder.Services.AddHostedService<SincronizadorXsd>();
+
 builder.Services.AddSingleton<ProcesadorComprobantes>();
 builder.Services.AddHostedService<ServicioWorker>();
 
@@ -148,6 +153,17 @@ ValidacionPrevia.Bloquea = ConfiguracionSecretos
     .Opcional("FACTURACION_XSD_BLOQUEA", "false")
     .Equals("true", StringComparison.OrdinalIgnoreCase);
 
+// REGLAS DE SUNAT DE 2027 (14 oct 2026): desde qué fecha se generan los
+// documentos con ellas. La oficial es el 2027-01-01; SUNAT ya la postergó una
+// vez, así que se puede cambiar aquí sin tocar el código. Ver VigenciaSunat.
+if (DateTime.TryParseExact(
+        ConfiguracionSecretos.Opcional("SUNAT_REGLAS_2027_DESDE", ""),
+        "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+        System.Globalization.DateTimeStyles.None, out var reglas2027))
+{
+    VigenciaSunat.Reglas2027Desde = reglas2027;
+}
+
 var host = builder.Build();
 
 // SE DICE AL ARRANCAR QUÉ SE VA A COMPROBAR Y QUÉ NO. El modo de fallo de
@@ -155,6 +171,10 @@ var host = builder.Build();
 host.Services.GetRequiredService<ILoggerFactory>()
     .CreateLogger("ValidacionPrevia")
     .LogInformation("{Diagnostico}", ValidacionPrevia.Diagnostico());
+
+host.Services.GetRequiredService<ILoggerFactory>()
+    .CreateLogger("ReglasSunat")
+    .LogInformation("{Diagnostico}", VigenciaSunat.Diagnostico());
 
 // Lo mismo con los destinos de webhook: si el worker no está en Development,
 // el webhook de la plataforma en http://localhost se bloquea, y conviene

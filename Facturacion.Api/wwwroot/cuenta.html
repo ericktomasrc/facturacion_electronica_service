@@ -210,6 +210,7 @@ const PANTALLAS = [
   { url:"/diagnostico.html", texto:"Estado del servicio", permiso:"diagnostico.ver" },
   { url:"/admin.html",       texto:"Empresas",            permiso:"empresas.ver" },
   { url:"/comprobantes.html",texto:"Comprobantes",        permiso:"comprobantes.ver" },
+  { url:"/vigilancia.html",  texto:"Vigilancia SUNAT",    permiso:"diagnostico.ver" },
   { url:"/usuarios.html",    texto:"Usuarios",            permiso:"usuarios.gestionar" },
   { url:"/cuenta.html",      texto:"Mi cuenta",           permiso:null }
 ];
@@ -478,5 +479,6 @@ document.querySelectorAll('input[type=password]').forEach(c => {
 
 cargarUsuario().then(ok => { if (ok) pintarEstado2fa(); });
 </script>
+<script src="/menu-lateral.js"></script>
 </body>
 </html>

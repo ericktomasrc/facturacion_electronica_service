@@ -107,11 +107,12 @@ public sealed class RepositorioWebhookApi
             id = await sesion.Conexion.ExecuteScalarAsync<Guid>(new CommandDefinition(
                 """
                 INSERT INTO webhooks
-                       (tenant_id, nombre, url, secreto, eventos, origen, secreto_cambiado_en)
-                VALUES (@tenantId, @nombre, @url, @secreto, '{}', 'api', now())
+                       (tenant_id, nombre, url, secreto_cifrado, eventos, origen, secreto_cambiado_en)
+                VALUES (@tenantId, @nombre, @url, @secretoCifrado, '{}', 'api', now())
                 RETURNING id
                 """,
-                new { tenantId, nombre = NombreWebhook, url, secreto },
+                // CIFRADO (migración 032): en la base no queda en claro.
+                new { tenantId, nombre = NombreWebhook, url, secretoCifrado = SecretosWebhook.Cifrar(secreto) },
                 sesion.Transaccion, cancellationToken: ct));
         }
         else
@@ -122,12 +123,15 @@ public sealed class RepositorioWebhookApi
                 """
                 UPDATE webhooks
                    SET url = @url,
-                       secreto = @secreto,
+                       secreto = NULL,
+                       secreto_cifrado = @secretoCifrado,
                        secreto_cambiado_en = now()
                  WHERE id = @id
                    AND tenant_id = @tenantId
                 """,
-                new { id, tenantId, url, secreto },
+                // El secreto NUEVO, cifrado (032). El viejo deja de valer, y si
+                // quedaba en claro de antes de la 032, se va con él.
+                new { id, tenantId, url, secretoCifrado = SecretosWebhook.Cifrar(secreto) },
                 sesion.Transaccion, cancellationToken: ct));
         }
 

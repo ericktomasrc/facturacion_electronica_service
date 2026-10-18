@@ -964,6 +964,7 @@
             { url: "/diagnostico.html", texto: "Estado del servicio", permiso: "diagnostico.ver" },
             { url: "/admin.html", texto: "Empresas", permiso: "empresas.ver" },
             { url: "/comprobantes.html", texto: "Comprobantes", permiso: "comprobantes.ver" },
+            { url: "/vigilancia.html", texto: "Vigilancia SUNAT", permiso: "diagnostico.ver" },
             { url: "/usuarios.html", texto: "Usuarios", permiso: "usuarios.gestionar" },
             { url: "/cuenta.html", texto: "Mi cuenta", permiso: null }
         ];
@@ -1072,9 +1073,16 @@
             return cuerpo;
         }
 
+        // LA EMPRESA DE CONTROL (RUC 20999999990, la de la prueba de madrugada)
+        // no es un cliente: se ve en Vigilancia SUNAT, no en esta lista.
+        const RUC_CONTROL = "20999999990";
+        async function cargarEmpresas() {
+            return (await api("/admin/tenants")).filter(e => e.ruc !== RUC_CONTROL);
+        }
+
         async function iniciar() {
             try {
-                estado.empresas = await api("/admin/tenants");
+                estado.empresas = await cargarEmpresas();
                 await cargarClavesAlta();
                 pintar();
             } catch (e) {
@@ -1923,6 +1931,7 @@
 
             if (elem("btn-marca")) elem("btn-marca").onclick = guardarMarca;
             if (elem("btn-direccion")) elem("btn-direccion").onclick = guardarDireccion;
+            if (elem("d-dep")) enlazarUbigeo(estado.seleccionada);
             if (elem("btn-logo")) elem("btn-logo").onclick = subirLogo;
 
             const archivo = elem("l-archivo");
@@ -2549,18 +2558,18 @@
 
         <div class="rejilla" style="margin-top:0">
           <label>Dirección<input id="d-direccion" ${dis} value="${esc(t.direccion ?? "")}"></label>
-          <label>Distrito<input id="d-distrito" ${dis} value="${esc(t.distrito ?? "")}"></label>
-          <label>Provincia<input id="d-provincia" ${dis} value="${esc(t.provincia ?? "")}"></label>
-          <label>Departamento<input id="d-departamento" ${dis} value="${esc(t.departamento ?? "")}"></label>
-          <label>Ubigeo<input id="d-ubigeo" ${dis} maxlength="6" inputmode="numeric"
-                              value="${esc(t.ubigeo ?? "")}"></label>
+          <label>Departamento<select id="d-dep" ${dis}></select></label>
+          <label>Provincia<select id="d-pro" ${dis}></select></label>
+          <label>Distrito<select id="d-dis" ${dis}></select></label>
+          <label>Ubigeo<input id="d-ubigeo" disabled value="${esc(t.ubigeo ?? "")}"
+                              title="Se pone solo con el distrito"></label>
         </div>
         <div class="err" id="e-dir" style="margin:-6px 0 8px"></div>
 
         <div class="aviso-linea" style="margin-bottom:8px">
           <strong>Cópiala tal cual de la ficha RUC.</strong> Sale en cada comprobante, y
-          SUNAT no la corrige: el ubigeo tiene que ser el del distrito, y la provincia y el
-          departamento, los de ese distrito.
+          SUNAT no la corrige. Elige el departamento, la provincia y el distrito: el ubigeo
+          se pone solo.
         </div>
         <div class="tenue" style="font-size:12.5px;margin-bottom:12px">
           Los comprobantes ya emitidos no cambian: llevan la dirección con la que se firmaron.
@@ -2573,15 +2582,22 @@
             const t = estado.seleccionada;
             const valor = id => elem(id).value.trim();
 
+            // Departamento ▸ provincia ▸ distrito (17 oct): los nombres y el
+            // ubigeo salen de la lista del INEI, no se teclean.
+            const opcion = elem("d-dis").selectedOptions[0];
             const cuerpo = {
                 direccion: valor("d-direccion"),
-                distrito: valor("d-distrito"),
-                provincia: valor("d-provincia"),
-                departamento: valor("d-departamento"),
-                ubigeo: valor("d-ubigeo")
+                distrito: opcion ? (opcion.dataset.nombre || "") : "",
+                provincia: elem("d-pro").value,
+                departamento: elem("d-dep").value,
+                ubigeo: elem("d-dis").value
             };
 
             elem("e-dir").textContent = "";
+            if (!/^\d{6}$/.test(cuerpo.ubigeo)) {
+                elem("e-dir").textContent = "Elige el departamento, la provincia y el distrito.";
+                return;
+            }
 
             const boton = elem("btn-direccion");
             boton.disabled = true;
@@ -2602,6 +2618,48 @@
                 elem("e-dir").textContent = ex.detalle || ex.message;
                 boton.disabled = false;
             }
+        }
+
+        /// Las tres listas de la dirección fiscal, desde ubigeo.js (lista del INEI).
+        /// Abren con el distrito guardado; si el ubigeo guardado no está en la
+        /// lista, abren vacías y lo dicen.
+        function enlazarUbigeo(t) {
+            const A = window.UBIGEO;
+            const dep = elem("d-dep"), pro = elem("d-pro"), dis = elem("d-dis"), ubi = elem("d-ubigeo");
+            if (!dep) return;
+            if (!A) { elem("e-dir").textContent = "No se cargó la lista de ubigeos (ubigeo.js). Recarga con Ctrl+F5."; return; }
+
+            const legible = n => n.toLowerCase().replace(/(^|[\s(-])\S/g, c => c.toUpperCase());
+            const llenar = (s, pares, sel, vacio) => {
+                s.innerHTML = `<option value="">${esc(vacio)}</option>` + pares.map(([texto, valor, nombre]) =>
+                    `<option value="${esc(valor)}" data-nombre="${esc(nombre ?? valor)}"${valor === sel ? " selected" : ""}>${esc(texto)}</option>`).join("");
+            };
+
+            let inicial = null;
+            for (const [d, ps] of Object.entries(A))
+                for (const [p, ds] of Object.entries(ps))
+                    for (const [n, c] of ds)
+                        if (c === (t.ubigeo || "").trim()) inicial = { d, p, c };
+
+            const cargarDistritos = sel => {
+                const lista = (A[dep.value] || {})[pro.value] || [];
+                llenar(dis, lista.map(([n, c]) => [legible(n), c, n]), sel, pro.value ? "Elige…" : "Primero la provincia");
+                ubi.value = dis.value;
+            };
+            const cargarProvincias = (sel, selDis) => {
+                llenar(pro, Object.keys(A[dep.value] || {}).map(p => [legible(p), p]), sel, dep.value ? "Elige…" : "Primero el departamento");
+                cargarDistritos(selDis);
+            };
+
+            llenar(dep, Object.keys(A).map(d => [legible(d), d]), inicial ? inicial.d : "", "Elige…");
+            cargarProvincias(inicial ? inicial.p : "", inicial ? inicial.c : "");
+
+            dep.onchange = () => cargarProvincias("", "");
+            pro.onchange = () => cargarDistritos("");
+            dis.onchange = () => { ubi.value = dis.value; };
+
+            if ((t.ubigeo || "").trim() && !inicial)
+                elem("e-dir").textContent = `El ubigeo guardado (${t.ubigeo}) no está en la lista del INEI: elige el distrito otra vez.`;
         }
 
         /// Quién creó la empresa: el panel o una clave de alta (la plataforma).
@@ -2804,7 +2862,7 @@
 
         async function recargar() {
             const id = estado.seleccionada?.id;
-            estado.empresas = await api("/admin/tenants");
+            estado.empresas = await cargarEmpresas();
             estado.seleccionada = id ? estado.empresas.find(e => e.id === id) : null;
             pintar();
         }
@@ -3210,7 +3268,7 @@
                 // Se actualiza la lista sin repintar el detalle, para no borrar la clave
                 // que el operador todavía no ha copiado.
                 estado.claves = await api(`/admin/tenants/${estado.seleccionada.id}/claves`);
-                estado.empresas = await api("/admin/tenants");
+                estado.empresas = await cargarEmpresas();
 
                 const tabla = elem("tabla-claves");
                 if (tabla) { tabla.innerHTML = tablaClaves(); enlazarRevocar(); }
@@ -3346,5 +3404,7 @@
 
         cargarUsuario().then(ok => { if (ok) iniciar(); });
     </script>
+<script src="/ubigeo.js"></script>
+<script src="/menu-lateral.js"></script>
 </body>
 </html>

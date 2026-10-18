@@ -593,6 +593,23 @@ public static class ReglasLiquidacion
 
             if (string.IsNullOrWhiteSpace(l.Descripcion))
                 problemas.Add($"Falta la descripcion del producto de la linea {i} (error 2026).");
+
+            // EL CÓDIGO DE PRODUCTO SUNAT: con forma válida si viene, y
+            // OBLIGATORIO desde las reglas de 2027 (ERR-3506). Antes de esa
+            // fecha, que falte es solo un aviso, para ir preparándolo.
+            if (CodigoProductoSunat.Problema(l.CodigoProductoSunat) is { } malCodigo)
+            {
+                problemas.Add($"Linea {i}: {malCodigo}");
+            }
+            else if (string.IsNullOrWhiteSpace(l.CodigoProductoSunat))
+            {
+                problemas.Add(VigenciaSunat.Rigen2027(lc.FechaEmision)
+                    ? $"La linea {i} no tiene codigo de producto SUNAT (codigoProductoSunat, " +
+                      $"catalogo 25). En la liquidacion de compra es obligatorio (error 3506)."
+                    : $"Aviso: la linea {i} no tiene codigo de producto SUNAT. Desde el " +
+                      $"{VigenciaSunat.Reglas2027Desde:dd/MM/yyyy} sera obligatorio en la " +
+                      $"liquidacion de compra (error 3506).");
+            }
         }
 
         // --- La retención -----------------------------------------------------

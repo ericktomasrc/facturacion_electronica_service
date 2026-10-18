@@ -79,12 +79,13 @@ public static class EndpointsBajas
             CrearAsync(peticion, TipoComunicacionBaja.Reversion,
                 emisor, comprobantes, bajas, ct))
             .WithName("ComunicarReversion")
-            .WithSummary("Revierte comprobantes de retención y percepción")
+            .WithSummary("Revierte retenciones, percepciones y liquidaciones de compra")
             .WithDescription(
                 "Responde 202: el resumen de reversiones queda registrado, " +
                 "pero todavía NO fue a SUNAT. Lo envía el worker, que después " +
                 "consulta el ticket.\n\n" +
-                "**Solo retenciones (20) y percepciones (40).** Las facturas y " +
+                "**Solo retenciones (20), percepciones (40) y liquidaciones " +
+                "de compra (04, cinco días desde su aceptación).** Las facturas y " +
                 "sus notas se anulan con una comunicación de baja: " +
                 "`POST /v1/bajas`. Meter una en la otra se rechaza con el " +
                 "error 2308.\n\n" +

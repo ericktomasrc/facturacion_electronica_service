@@ -92,16 +92,19 @@ public static class EndpointsConfiguracion
                 var coincide = MencionaRuc(certificado, tenant.Ruc);
                 var titular = certificado.GetNameInfo(X509NameType.SimpleName, false);
 
-                // EL RUC TIENE QUE COINCIDIR. Casi todas las certificadoras lo
-                // ponen en el sujeto; si esta no, se pide confirmarlo, como el
-                // correlativo de una serie.
-                if (!coincide && confirmado != true)
+                // EL RUC TIENE QUE COINCIDIR, SIN EXCEPCIÓN (18 oct). Antes se
+                // podía confirmar a mano; ya no: con el certificado de otra
+                // empresa SUNAT rechaza todo. `confirmado` se sigue aceptando
+                // para no romper a quien lo mande, pero no cambia nada.
+                // Si una certificadora pone el RUC donde no lo vemos, el super
+                // administrador lo carga desde el panel (empresa > Certificado).
+                _ = confirmado;
+                if (!coincide)
                     return Results.UnprocessableEntity(new
                     {
-                        error = $"Este certificado no menciona el RUC {tenant.Ruc}.",
-                        detalle = $"Es de «{titular}». Con el certificado de otra empresa SUNAT rechaza " +
-                                  "todo. Si estás seguro de que es el tuyo (algunas certificadoras ponen el " +
-                                  "RUC en otro sitio), confírmalo.",
+                        error = $"Este certificado no es del RUC {tenant.Ruc}.",
+                        detalle = $"Es de «{titular}». SUNAT rechaza todo lo firmado con el certificado " +
+                                  "de otra empresa. Sube el certificado de esta empresa.",
                         codigo = "ruc_no_coincide",
                         titular
                     });
@@ -438,15 +441,24 @@ public static class EndpointsConfiguracion
     /// <summary>¿El RUC sale en el sujeto o en alguna extensión del certificado?</summary>
     private static bool MencionaRuc(X509Certificate2 certificado, string ruc)
     {
-        if (certificado.Subject.Contains(ruc, StringComparison.Ordinal)) return true;
+        // 18 OCT: RUC 10 = PERSONA NATURAL. Su certificado a veces lleva el DNI
+        // (los 8 dígitos del medio del RUC) en vez del RUC; también vale.
+        var buscados = ruc.StartsWith("10", StringComparison.Ordinal) && ruc.Length == 11
+            ? new[] { ruc, ruc.Substring(2, 8) }
+            : new[] { ruc };
 
-        foreach (var extension in certificado.Extensions)
+        foreach (var buscado in buscados)
         {
-            try
+            if (certificado.Subject.Contains(buscado, StringComparison.Ordinal)) return true;
+
+            foreach (var extension in certificado.Extensions)
             {
-                if (extension.Format(false).Contains(ruc, StringComparison.Ordinal)) return true;
+                try
+                {
+                    if (extension.Format(false).Contains(buscado, StringComparison.Ordinal)) return true;
+                }
+                catch (CryptographicException) { /* una extensión que no se sabe leer */ }
             }
-            catch (CryptographicException) { /* una extensión que no se sabe leer */ }
         }
 
         return false;

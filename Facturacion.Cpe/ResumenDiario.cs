@@ -407,27 +407,23 @@ public record ResultadoTicket(
 /// <summary>
 /// Catálogo 11: identificador del tipo de monto en el resumen.
 ///
-/// SON CINCO VALORES Y NO HAY MÁS. Los cinco están aquí abajo.
-///
-/// ESTA CLASE TUVO DOS ERRORES, Y EL SEGUNDO COSTÓ UN RECHAZO:
+/// HISTORIA, PORQUE ESTA CLASE YA SE EQUIVOCÓ DOS VECES:
 ///
 /// 1. Tenía un "05 = ISC" que no existe. El ISC no se declara en el catálogo
-///    11 en absoluto: va en su propio cac:TaxTotal con el tributo 2000,
-///    igual que el IGV.
+///    11 en absoluto: va en su propio cac:TaxTotal con el tributo 2000.
 ///
-/// 2. Después se le añadieron un 06, un 07, un 08 y un 09 para desglosar las
-///    gratuitas por clase. Esos cuatro códigos NO EXISTEN. SUNAT rechazó el
-///    resumen con el error 2256:
+/// 2. Se le añadieron 06, 07, 08 y 09 para desglosar las gratuitas cuando
+///    TODAVÍA NO EXISTÍAN, y SUNAT rechazó con el error 2256 («Valor no se
+///    encuentra en el catalogo: 11», valor "06"). Se volvió al 05.
 ///
-///        Valor no se encuentra en el catalogo: 11
-///        (nodo: "sac:BillingPayment/cbc:InstructionID" valor: "06")
+/// 3. AHORA SUNAT LOS CREA DE VERDAD (Reglas de validación, 24/04/2026, con
+///    vigencia postergada al 01/01/2027): 06 gratuitas gravadas, 07
+///    exoneradas, 08 inafectas y 09 de exportación. Y DESACTIVA el 05.
 ///
-///    La confusión venía de la factura, donde cada clase de gratuita sí
-///    tiene su afectación propia en el catálogo 07. El resumen no distingue:
-///    solo quiere saber cuánto se entregó sin cobrar.
-///
-/// SI ALGUIEN VUELVE A NECESITAR UN CÓDIGO QUE NO ESTÉ AQUÍ, es que no
-/// existe. El catálogo 11 no ha crecido desde que se publicó.
+/// Por eso conviven los dos juegos de códigos, y cuál se usa lo decide la
+/// fecha de generación del resumen: <see cref="VigenciaSunat.Rigen2027"/>.
+/// Antes de esa fecha, el 05; desde esa fecha, el desglose. Mandar el
+/// desglose antes, o el 05 después, es el mismo error 2256.
 /// </summary>
 public static class TipoMontoResumen
 {
@@ -436,9 +432,12 @@ public static class TipoMontoResumen
     public const string Inafecto = "03";
     public const string Exportacion = "04";
 
-    /// <summary>
-    /// 05 - Gratuitas, todas juntas. No se desglosan por clase: el catálogo
-    /// no tiene con qué.
-    /// </summary>
+    /// <summary>05 - Gratuitas, todas juntas. Solo hasta que rijan las reglas de 2027.</summary>
     public const string Gratuitas = "05";
+
+    // --- Desde que rigen las reglas de 2027 -----------------------------------
+    public const string GratuitasGravadas = "06";
+    public const string GratuitasExoneradas = "07";
+    public const string GratuitasInafectas = "08";
+    public const string GratuitasExportacion = "09";
 }

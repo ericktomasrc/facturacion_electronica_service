@@ -338,6 +338,8 @@ public static class EndpointsLiquidaciones
             {
                 Numero = indice + 1,
                 CodigoProducto = l.CodigoProducto,
+                CodigoProductoSunat = string.IsNullOrWhiteSpace(l.CodigoProductoSunat)
+                    ? null : l.CodigoProductoSunat.Trim(),
                 Descripcion = l.Descripcion,
                 UnidadMedida = l.UnidadMedida,
                 Cantidad = l.Cantidad,

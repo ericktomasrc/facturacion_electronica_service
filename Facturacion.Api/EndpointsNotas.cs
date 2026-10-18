@@ -138,6 +138,16 @@ public static class EndpointsNotas
             return Results.BadRequest(new RespuestaError(
                 "La nota necesita al menos una línea."));
 
+        // El código de producto SUNAT, si viene: con forma válida (ERR-3496
+        // desde 2027). Se ve aquí, antes de gastar un correlativo.
+        var codigosSunatMalos = CodigoProductoSunat.Problemas(
+            peticion.Lineas.Select(l => l.CodigoProductoSunat));
+
+        if (codigosSunatMalos.Count > 0)
+            return Results.BadRequest(new RespuestaError(
+                "Hay códigos de producto SUNAT que no son válidos.",
+                string.Join(" ", codigosSunatMalos)));
+
         if (peticion.Receptor.ProblemaCorreo() is { } problemaCorreo)
             return Results.BadRequest(new RespuestaError(
                 "El correo del receptor no es válido.", problemaCorreo));
@@ -203,6 +213,31 @@ public static class EndpointsNotas
         ComprobanteBase nota = esCredito
             ? ConstruirCredito(peticion, tenant)
             : ConstruirDebito(peticion, tenant);
+
+        // --- La nota de crédito no puede superar al documento ---
+        //
+        // SUNAT lo rechaza (3286 en facturas; en boletas, la observación 4028
+        // pasa a ser el error 3286 desde el 01/01/2027, con +1 de tolerancia).
+        // El motivo 10 «Otros conceptos» está exento, y si las monedas son
+        // distintas no se puede comparar. Decirlo aquí evita quemar un
+        // correlativo de la serie de notas en un rechazo seguro.
+        if (esCredito &&
+            peticion.CodigoMotivo != "10" &&
+            string.Equals(peticion.Moneda, afectado.Moneda, StringComparison.OrdinalIgnoreCase))
+        {
+            var totalNota = CalculadoraTotales.Calcular(nota).ImporteTotal;
+            var tolerancia = peticion.Afectado.TipoDocumento == TipoComprobante.Boleta ? 1m : 0m;
+
+            if (totalNota > afectado.ImporteTotal + tolerancia)
+            {
+                return Results.BadRequest(new RespuestaError(
+                    "La nota de crédito supera al comprobante que modifica.",
+                    $"La nota suma {totalNota:0.00} {peticion.Moneda} y " +
+                    $"{afectado.NumeroCompleto} fue por {afectado.ImporteTotal:0.00}. " +
+                    "SUNAT la rechazaría (error 3286). Si de verdad corresponde " +
+                    "un monto mayor, usa el motivo 10 «Otros conceptos»."));
+            }
+        }
 
         // --- Persistencia ---
 
@@ -296,6 +331,8 @@ public static class EndpointsNotas
         {
             Numero = indice + 1,
             CodigoProducto = l.CodigoProducto,
+            CodigoProductoSunat = string.IsNullOrWhiteSpace(l.CodigoProductoSunat)
+                ? null : l.CodigoProductoSunat.Trim(),
             Descripcion = l.Descripcion,
             UnidadMedida = l.UnidadMedida,
             Cantidad = l.Cantidad,

@@ -44,6 +44,7 @@ public sealed class ProcesadorBajas
     private readonly AlmacenCertificados _certificados;
     private readonly ProveedorCredenciales _credenciales;
     private readonly IAlmacenArchivos _archivos;
+    private readonly RepositorioXsd _xsd;
     private readonly ILogger<ProcesadorBajas> _log;
 
     public ProcesadorBajas(
@@ -52,8 +53,10 @@ public sealed class ProcesadorBajas
         AlmacenCertificados certificados,
         ProveedorCredenciales credenciales,
         IAlmacenArchivos archivos,
+        RepositorioXsd xsd,
         ILogger<ProcesadorBajas> log)
     {
+        _xsd = xsd;
         _bajas = bajas;
         _cola = cola;
         _certificados = certificados;
@@ -143,6 +146,11 @@ public sealed class ProcesadorBajas
         var xml = GeneradorBajaXml.Generar(documento);
         var firmado = FirmadorXml.Firmar(xml, certificado);
         var bytes = SerializarSinBom(firmado);
+
+        // 033: se compara con su molde (UBL-VoidedDocuments). SOLO AVISA: la
+        // baja tiene siete días contados y no se para por esto.
+        await RevisionXsdWorker.RevisarYAnotarAsync(
+            _xsd, _log, baja.TenantId, tenant.Ruc, baja.Identificador, bytes, ct);
 
         var rutaXml = await _archivos.GuardarAsync(
             tenant.Ruc, documento.FechaGeneracion,

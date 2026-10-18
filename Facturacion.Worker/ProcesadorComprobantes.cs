@@ -80,6 +80,7 @@ public sealed class ProcesadorComprobantes
     private readonly AlmacenCertificados _certificados;
     private readonly ProveedorCredenciales _credenciales;
     private readonly IAlmacenArchivos _archivos;
+    private readonly RepositorioXsd _xsd;
     private readonly ILogger<ProcesadorComprobantes> _log;
 
     public ProcesadorComprobantes(
@@ -88,8 +89,10 @@ public sealed class ProcesadorComprobantes
         AlmacenCertificados certificados,
         ProveedorCredenciales credenciales,
         IAlmacenArchivos archivos,
+        RepositorioXsd xsd,
         ILogger<ProcesadorComprobantes> log)
     {
+        _xsd = xsd;
         _cola = cola;
         _comprobantes = comprobantes;
         _certificados = certificados;
@@ -140,15 +143,15 @@ public sealed class ProcesadorComprobantes
             // Por defecto solo avisa. Ver "AVISA, NO BLOQUEA" en
             // ValidacionPrevia: ese fallo de arriba es justamente el motivo.
 
-            var problemasEsquema = ValidacionPrevia.Comprobar(bytesXml);
+            // 033: además de decirlo en el log, se anota para la pestaña
+            // «Esquemas XSD» de Vigilancia SUNAT, con la línea y qué falla.
+            var revisionXsd = await RevisionXsdWorker.RevisarYAnotarAsync(
+                _xsd, _log, trabajo.TenantId, tenant.Ruc, comprobante.NumeroCompleto, bytesXml, ct);
+
+            var problemasEsquema = revisionXsd.Errores.Select(e => e.ToString()).ToList();
 
             if (problemasEsquema.Count > 0)
             {
-                _log.LogWarning(
-                    "{Numero}: el XML no cumple el esquema de SUNAT. {Problemas}",
-                    comprobante.NombreArchivo,
-                    string.Join(" | ", problemasEsquema));
-
                 if (ValidacionPrevia.Bloquea)
                 {
                     // SE REGISTRA COMO RECHAZADO Y NO COMO FALLO, y la

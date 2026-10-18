@@ -631,6 +631,11 @@ internal static class BloquesComunes
                     : new XElement(Ns.Cac + "SellersItemIdentification",
                         new XElement(Ns.Cbc + "ID", l.CodigoProducto)),
 
+                // El código de producto SUNAT (catálogo 25), si lo hay. VA
+                // AQUÍ Y NO MÁS ABAJO: UBL lo pone después de las
+                // identificaciones del ítem y antes de las propiedades.
+                CodigoProductoSunat.Bloque(l.CodigoProductoSunat),
+
                 // Los datos del catálogo 55, si los hay.
                 PropiedadesDelItem(l.Propiedades)),
 

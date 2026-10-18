@@ -419,6 +419,11 @@ public static class GeneradorLiquidacionXml
                     ? null
                     : new XElement(Ns.Cac + "SellersItemIdentification",
                         new XElement(Ns.Cbc + "ID", l.CodigoProducto)),
+
+                // El código de producto SUNAT: obligatorio aquí desde 2027
+                // (ReglasLiquidacion lo exige). Mismo sitio que en la factura.
+                CodigoProductoSunat.Bloque(l.CodigoProductoSunat),
+
                 PropiedadesDelItem(l.Propiedades)),
 
             new XElement(Ns.Cac + "Price",

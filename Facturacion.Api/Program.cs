@@ -72,10 +72,26 @@ builder.Services.AddSingleton(
     ReglasDestinoWebhook.Resolver(builder.Environment.IsDevelopment()));
 builder.Services.AddSingleton(new RepositorioConsultas(cadenaOperador));
 
-// El alta de emisores desde la plataforma y las claves de alta (024). Con el
-// rol de operador, como el panel: crea filas que la aplicación solo lee. Lo
-// que la acota está en RepositorioAltas (y el rol propio es el punto 23).
-builder.Services.AddSingleton(new RepositorioAltas(cadenaOperador));
+// El alta de emisores desde la plataforma y las claves de alta (024).
+//
+// PUNTO 23 (migración 034): la ruta /alta entra con su PROPIO rol de base,
+// facturacion_alta, que solo toca claves_alta, tenants, api_keys, webhooks y
+// webhook_cambios. El panel de claves de alta sigue con el operador.
+// Sin FACTURACION_ALTA_PASSWORD: en desarrollo usa el operador (lo avisa al
+// arrancar); en producción no arranca.
+var claveRolAlta = ConfiguracionSecretos.Opcional("FACTURACION_ALTA_PASSWORD", "");
+string? cadenaAlta = null;
+if (!string.IsNullOrWhiteSpace(claveRolAlta))
+    cadenaAlta = ConfiguracionSecretos.CadenaPostgres(
+        "facturacion_alta", "FACTURACION_ALTA_PASSWORD", "la ruta de alta de emisores (clave alt_)");
+else if (!builder.Environment.IsDevelopment())
+    throw new InvalidOperationException(
+        "Falta FACTURACION_ALTA_PASSWORD: la contraseña del rol facturacion_alta (migración 034). " +
+        "Ponla con ALTER ROLE facturacion_alta PASSWORD '...' y en el .env del servicio.");
+builder.Services.AddSingleton(new RepositorioAltas(cadenaOperador, cadenaAlta));
+
+// PUNTO 21: una clave fac_ se puede revocar a sí misma (para rotar desde la plataforma).
+builder.Services.AddSingleton(new RepositorioRevocacionClaves(cadenaOperador));
 builder.Services.AddScoped<ContextoClaveAlta>();
 builder.Services.AddSingleton(new RepositorioRoles(cadenaOperador));
 
@@ -122,6 +138,47 @@ builder.Services.AddSingleton<ServicioCorreo>();
 // las empresas) y el proceso que la vacía cada 30 segundos.
 builder.Services.AddSingleton(new RepositorioCorreosPortal(cadenaOperador));
 builder.Services.AddHostedService<ServicioCorreosEntrega>();
+
+// VIGILANCIA SUNAT (migración 029): la alarma de códigos nuevos. Cada 5
+// minutos anota los códigos que SUNAT devolvió a cualquier empresa y avisa
+// por correo cuando aparece uno que nunca había salido. Solo lee: si falla,
+// la facturación sigue igual.
+builder.Services.AddSingleton(new RepositorioVigilancia(cadenaOperador));
+builder.Services.AddSingleton(new ConsultasVigilancia(cadenaOperador));   // listas por páginas
+builder.Services.AddSingleton<VigilanciaSunat>();
+builder.Services.AddHostedService<ServicioVigilancia>();
+
+// VIGILANCIA DEL CATÁLOGO DE PRODUCTOS (migración 031): el Excel del catálogo
+// 25 se baja con el navegador y se sube en el panel (el portal de SUNAT
+// responde 403 a los programas); se compara con el que usa la plataforma.
+// Cada 30 días sin comparar, un recordatorio por correo.
+builder.Services.AddSingleton(new RepositorioCatalogoSunat(cadenaOperador));
+
+// ESQUEMAS XSD (migración 033): se suben aquí; el Worker los usa.
+builder.Services.AddSingleton(new RepositorioXsd(cadenaOperador));
+builder.Services.AddSingleton<VigilanciaCatalogo>();
+builder.Services.AddHostedService<ServicioVigilanciaCatalogo>();
+
+// PRUEBA DE MADRUGADA (migración 030): cada día a las 03:00 (Lima) emite en
+// SUNAT beta un comprobante de cada tipo con una empresa interna y lo compara
+// con la vez anterior. Entra por la propia API, como un cliente: la URL es la
+// del panel salvo que PRUEBA_MADRUGADA_URL diga otra. El certificado de
+// desarrollo solo se acepta si la llamada es a esta misma máquina.
+builder.Services.AddSingleton(new RepositorioMadrugada(cadenaOperador));
+builder.Services.AddSingleton<PruebaMadrugada>();
+builder.Services.AddHostedService<ServicioMadrugada>();
+builder.Services.AddHttpClient("madrugada", cliente =>
+    {
+        cliente.BaseAddress = new Uri(ConfiguracionSecretos.Opcional(
+            "PRUEBA_MADRUGADA_URL", opcionesCorreo.UrlPanel).TrimEnd('/') + "/");
+        cliente.Timeout = TimeSpan.FromSeconds(60);
+    })
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+    {
+        ServerCertificateCustomValidationCallback = (mensaje, _, _, errores) =>
+            errores == System.Net.Security.SslPolicyErrors.None
+            || (mensaje.RequestUri?.IsLoopback ?? false)
+    });
 
 // El repositorio de usuarios necesita el protector para cifrar el secreto
 // del segundo factor, igual que los certificados.
@@ -226,6 +283,26 @@ builder.Services.AddOpenApi(opciones =>
 
 var app = builder.Build();
 
+// DETRÁS DE CADDY (producción): la IP real del cliente llega en la cabecera
+// X-Forwarded-For, y SOLO se cree si la petición viene del proxy: la IP fija de
+// Caddy en la red de Docker (PROXY_IP_CONFIABLE). Sin esa variable no se lee
+// nada —en desarrollo no hay proxy—, porque fiarse de la cabecera dejaría a
+// cualquiera inventarse su IP y saltarse los límites de intentos por IP.
+var ipProxyConfiable = Environment.GetEnvironmentVariable("PROXY_IP_CONFIABLE");
+if (!string.IsNullOrWhiteSpace(ipProxyConfiable))
+{
+    var reenvio = new Microsoft.AspNetCore.Builder.ForwardedHeadersOptions
+    {
+        ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor |
+                           Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto,
+        ForwardLimit = 1
+    };
+    reenvio.KnownProxies.Clear();
+    foreach (var ip in ipProxyConfiable.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        reenvio.KnownProxies.Add(System.Net.IPAddress.Parse(ip));
+    app.UseForwardedHeaders(reenvio);
+}
+
 // Comprobar el almacén AL ARRANCAR, no al primer uso.
 //
 // Descubrir que la configuración está mal cuando un cliente emite su primera
@@ -294,6 +371,38 @@ if (!opcionesCorreo.Configurado)
 app.Logger.LogInformation("{Diagnostico}",
     ReglasDestinoWebhook.Diagnostico(app.Environment.IsDevelopment()));
 
+// LOS SECRETOS DE WEBHOOK, CIFRADOS (migración 032). Los que quedaron en claro
+// de antes se cifran ahora. La copia en claro NO se borra aquí: se vacía a mano
+// cuando se comprobó que los avisos siguen llegando bien firmados.
+try
+{
+    var repoWebhooks = app.Services.GetRequiredService<RepositorioWebhooks>();
+    var recienCifrados = await repoWebhooks.CifrarSecretosEnClaroAsync();
+    var enClaro = await repoWebhooks.ContarEnClaroAsync();
+
+    if (recienCifrados > 0)
+        app.Logger.LogInformation(
+            "Secretos de webhook: {Cifrados} cifrados ahora con la llave maestra.", recienCifrados);
+
+    if (enClaro > 0)
+        app.Logger.LogWarning(
+            "Secretos de webhook: {EnClaro} todavía tienen la copia en claro (ya cifrada). " +
+            "Cuando compruebes que los avisos llegan bien, vacíala: " +
+            "UPDATE webhooks SET secreto = NULL WHERE secreto_cifrado IS NOT NULL;", enClaro);
+}
+catch (Npgsql.PostgresException ex) when (ex.SqlState == "42703")
+{
+    app.Logger.LogError(
+        "Falta aplicar la migración 032 (webhooks.secreto_cifrado). Sin ella no se pueden " +
+        "crear webhooks ni entregar avisos. Aplícala y reinicia.");
+}
+catch (InvalidOperationException ex)
+{
+    // Sin FACTURACION_LLAVE_MAESTRA no se puede cifrar. No se tumba el arranque
+    // por esto: se dice, y lo demás sigue.
+    app.Logger.LogError("Secretos de webhook: no se pudieron cifrar. {Motivo}", ex.Message);
+}
+
 // Sirve el panel desde wwwroot.
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -308,6 +417,16 @@ app.UseMiddleware<AutenticacionApiKey>();
 app.MapearSesion();
 app.MapearRoles();
 app.MapearDiagnostico();
+app.MapearVigilancia();
+app.MapearVigilanciaPaginas();
+app.MapearPruebaMadrugada();
+app.MapearVigilanciaCatalogo();
+app.MapearEsquemasXsd();          // 033: subir los esquemas XSD y ver los avisos
+app.MapearRevocarClave();          // punto 21: POST /v1/clave/revocar
+if (cadenaAlta is null)
+    app.Logger.LogWarning(
+        "La ruta de alta usa el rol de OPERADOR: falta FACTURACION_ALTA_PASSWORD (migración 034, punto 23). " +
+        "Solo se admite en desarrollo.");
 app.MapearAdministracion();
 app.MapearWebhooks();
 app.MapearWebhookApi();
@@ -830,6 +949,8 @@ static ComprobanteBase ConstruirComprobante(
     {
         Numero = indice + 1,
         CodigoProducto = l.CodigoProducto,
+        CodigoProductoSunat = string.IsNullOrWhiteSpace(l.CodigoProductoSunat)
+            ? null : l.CodigoProductoSunat.Trim(),
         Descripcion = l.Descripcion,
         UnidadMedida = l.UnidadMedida,
         Cantidad = l.Cantidad,
@@ -865,6 +986,16 @@ static ComprobanteBase ConstruirComprobante(
             "Hay afectaciones de IGV que no existen en el catalogo 07: " +
             $"{string.Join(", ", afectacionesRaras)}.");
     }
+
+    // --- El código de producto SUNAT, si viene, con su forma ---------------
+    //
+    // Desde 2027 uno mal formado hace rechazar el comprobante (ERR-3496); hasta
+    // entonces deja una observación. Aquí se ve antes de gastar un correlativo.
+    var codigosSunatMalos = CodigoProductoSunat.Problemas(
+        lineas.Select(l => l.CodigoProductoSunat));
+
+    if (codigosSunatMalos.Count > 0)
+        throw new ArgumentException(string.Join(" ", codigosSunatMalos));
 
     var tipoCambio = peticion.TipoCambio is null ? null : new TipoCambio
     {
@@ -1078,6 +1209,14 @@ static ComprobanteBase ConstruirComprobante(
 
     if (problemasFechaBoleta.Count > 0)
         throw new ArgumentException(string.Join(" ", problemasFechaBoleta));
+
+    // MÁS DE S/ 700, CON NOMBRE Y DOCUMENTO (Reglamento de Comprobantes de
+    // Pago, art. 8, num. 3.10). SUNAT no lo ve, porque el adquirente siempre
+    // viaja, aunque sea «0 / - / CLIENTES VARIOS»: lo tenemos que ver aquí.
+    var problemasIdentificacion = BoletaIdentificada.Errores(comprobante);
+
+    if (problemasIdentificacion.Count > 0)
+        throw new ArgumentException(string.Join(" ", problemasIdentificacion));
 
     return comprobante;
 }

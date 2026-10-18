@@ -39,6 +39,7 @@ public sealed class ProcesadorResumenes
     private readonly AlmacenCertificados _certificados;
     private readonly ProveedorCredenciales _credenciales;
     private readonly IAlmacenArchivos _archivos;
+    private readonly RepositorioXsd _xsd;
     private readonly ILogger<ProcesadorResumenes> _log;
 
     public ProcesadorResumenes(
@@ -47,8 +48,10 @@ public sealed class ProcesadorResumenes
         AlmacenCertificados certificados,
         ProveedorCredenciales credenciales,
         IAlmacenArchivos archivos,
+        RepositorioXsd xsd,
         ILogger<ProcesadorResumenes> log)
     {
+        _xsd = xsd;
         _resumenes = resumenes;
         _cola = cola;
         _certificados = certificados;
@@ -203,6 +206,12 @@ public sealed class ProcesadorResumenes
         var firmado = FirmadorXml.Firmar(xml, certificado);
         var bytes = SerializarSinBom(firmado);
 
+        // 033: se compara con su molde (UBL-SummaryDocuments). SOLO AVISA: un
+        // resumen no se para por esto, porque de él dependen todas las
+        // boletas del día.
+        await RevisionXsdWorker.RevisarYAnotarAsync(
+            _xsd, _log, resumen.TenantId, tenant.Ruc, resumen.Identificador, bytes, ct);
+
         var rutaXml = await _archivos.GuardarAsync(
             tenant.Ruc, documento.FechaGeneracion,
             $"{documento.NombreArchivo}.xml", bytes, ct);
@@ -241,6 +250,9 @@ public sealed class ProcesadorResumenes
 
     // ----------------------------------------------------- 3. consultar
 
+    /// <summary>Veces que se vuelve a preguntar por un ticket que SUNAT no conoce (0127) antes de reenviar.</summary>
+    private const int ConsultasTicketPerdido = 6;
+
     public async Task ConsultarTicketsAsync(CancellationToken ct)
     {
         foreach (var resumen in await _resumenes.BuscarTicketsPendientesAsync(ct: ct))
@@ -278,6 +290,36 @@ public sealed class ProcesadorResumenes
                 "SUNAT sigue procesando el resumen.", ct);
 
             return;
+        }
+
+        // 0127 «EL TICKET NO EXISTE» (17 oct): SUNAT perdió el ticket; NO
+        // rechazó las boletas. Antes se cerraba como RECHAZADO y las boletas
+        // quedaban sin informar. Ahora se vuelve a preguntar cada 10 minutos
+        // durante una hora y, si SUNAT sigue sin conocerlo, se reenvía el
+        // resumen (ticket nuevo). Pasados 3 días se cierra como antes, a la
+        // vista: SUNAT da 7 para informar boletas y no conviene llegar al
+        // límite reintentando en silencio.
+        if (resultado.CodigoRespuesta is "0127" or "127")
+        {
+            if (resumen.IntentosFallidos < ConsultasTicketPerdido)
+            {
+                await _resumenes.ProgramarReintentoAsync(
+                    resumen.Id, TimeSpan.FromMinutes(10),
+                    "SUNAT dice que el ticket no existe (0127). Se vuelve a preguntar.", ct);
+                return;
+            }
+
+            if (DateTime.UtcNow - resumen.CreadoEn.ToUniversalTime() < TimeSpan.FromDays(3))
+            {
+                await _resumenes.ReenviarSinTicketAsync(
+                    resumen.Id,
+                    "SUNAT perdió el ticket (0127): se reenvía el resumen.", ct);
+
+                _log.LogWarning(
+                    "{Id}: SUNAT sigue sin conocer el ticket {Ticket} (0127). Se reenvía el resumen.",
+                    resumen.Identificador, resumen.Ticket);
+                return;
+            }
         }
 
         if (resultado.EsReintentable)

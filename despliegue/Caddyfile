@@ -1,0 +1,49 @@
+# =============================================================================
+# CADDY — TLS automático y proxy. Los dominios llegan del .env (compose).
+#
+#   {$DOMINIO_SERVICIO}    la API del servicio y su panel        (api.reyban.pe)
+#   {$DOMINIO_PORTAL}      el portal del receptor                (comprobantes.reyban.pe)
+#   {$DOMINIO_PLATAFORMA}  la plataforma: front + /api           (app.reyban.pe)
+#
+# Comprobar sin arrancar:  docker compose -f docker-compose.produccion.yml run --rm caddy caddy validate --config /etc/caddy/Caddyfile
+# =============================================================================
+
+{
+	email {$CORREO_TLS}
+}
+
+(comun) {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+	# Los .pfx, los logos y el paquete de esquemas XSD (hasta 25 MB) caben.
+	request_body {
+		max_size 30MB
+	}
+}
+
+{$DOMINIO_SERVICIO} {
+	import comun
+	header X-Frame-Options "DENY"
+	reverse_proxy facturacion-api:8080
+}
+
+# EL PORTAL: el receptor ve comprobantes.reyban.pe/{empresa}/..., y el
+# servicio lo sirve bajo /portal. Se REESCRIBE (no se redirige) y se antepone
+# /portal a TODO: por este dominio no se llega ni a /v1 ni a /admin.
+{$DOMINIO_PORTAL} {
+	import comun
+	header X-Frame-Options "DENY"
+	rewrite * /portal{uri}
+	reverse_proxy facturacion-api:8080
+}
+
+{$DOMINIO_PLATAFORMA} {
+	import comun
+	header X-Frame-Options "DENY"
+	reverse_proxy plataforma:8080
+}
