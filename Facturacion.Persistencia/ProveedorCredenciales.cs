@@ -43,8 +43,18 @@ public sealed class ProveedorCredenciales
     /// En beta usa las credenciales públicas de pruebas. En producción
     /// descifra las del contribuyente.
     /// </summary>
+    public Task<ConfiguracionSunat> ObtenerAsync(
+        Guid tenantId, CancellationToken ct = default) =>
+        ObtenerAsync(tenantId, null, ct);
+
+    /// <summary>
+    /// 036: la configuración para el AMBIENTE DEL DOCUMENTO, no el de la
+    /// empresa ahora. Una boleta de prueba que espera su resumen cuando la
+    /// empresa ya pasó a real se informa a beta; nunca a producción.
+    /// Con <paramref name="ambiente"/> null, el de la empresa (como antes).
+    /// </summary>
     public async Task<ConfiguracionSunat> ObtenerAsync(
-        Guid tenantId, CancellationToken ct = default)
+        Guid tenantId, string? ambiente, CancellationToken ct = default)
     {
         await using var conexion = new NpgsqlConnection(_cadenaOperador);
         await conexion.OpenAsync(ct);
@@ -72,7 +82,7 @@ public sealed class ProveedorCredenciales
                 "El emisor está desactivado. Sus comprobantes no deben enviarse " +
                 "hasta que se reactive.");
 
-        if (fila.Ambiente != "produccion")
+        if ((ambiente ?? fila.Ambiente) != "produccion")
             return ConfiguracionSunat.Beta(fila.Ruc);
 
         // --- Producción ---
@@ -148,7 +158,12 @@ public sealed class ProveedorCredenciales
 
                        (SELECT c.valido_hasta FROM certificados c
                          WHERE c.tenant_id = t.id AND c.activo
-                         LIMIT 1)                                 AS "CertificadoVence"
+                         LIMIT 1)                                 AS "CertificadoVence",
+
+                       -- 037: true autofirmado, false de certificadora, null no se sabe.
+                       (SELECT c.autofirmado FROM certificados c
+                         WHERE c.tenant_id = t.id AND c.activo
+                         LIMIT 1)                                 AS "CertificadoAutofirmado"
 
                   FROM tenants t
                  WHERE t.id = @tenantId
@@ -166,6 +181,15 @@ public sealed class ProveedorCredenciales
             faltantes.Add(
                 "No tiene certificado digital. Sin él no se puede firmar, y " +
                 "SUNAT rechaza todo lo que no esté firmado.");
+        // 037: el certificado tiene que ser de una entidad certificadora.
+        else if (d.CertificadoAutofirmado == true)
+            faltantes.Add(
+                "El certificado es de prueba (autofirmado): no lo emitió una entidad " +
+                "certificadora. Sirve para beta; para SUNAT real sube el certificado digital de verdad.");
+        else if (d.CertificadoAutofirmado is null)
+            faltantes.Add(
+                "Vuelve a subir el certificado para comprobar que lo emitió una entidad " +
+                "certificadora (se cargó antes de esta revisión).");
         else
         {
             // Un certificado autofirmado sirve en beta pero NO en producción:
@@ -305,6 +329,28 @@ public sealed class ProveedorCredenciales
         string? ClientId, byte[]? SecretoCifrado,
         string? UsuarioSol, byte[]? ClaveCifrada, bool Activo);
 
+    /// <summary>036: en qué ambiente nació un comprobante (null si no existe).</summary>
+    public async Task<string?> AmbienteDeComprobanteAsync(
+        Guid comprobanteId, CancellationToken ct = default)
+    {
+        await using var conexion = new NpgsqlConnection(_cadenaOperador);
+        await conexion.OpenAsync(ct);
+        return await conexion.ExecuteScalarAsync<string?>(new CommandDefinition(
+            "SELECT ambiente FROM comprobantes WHERE id = @comprobanteId",
+            new { comprobanteId }, cancellationToken: ct));
+    }
+
+    /// <summary>036: el ambiente de un resumen o comunicación (RC, RA, RR).</summary>
+    public async Task<string?> AmbienteDeResumenAsync(
+        Guid resumenId, CancellationToken ct = default)
+    {
+        await using var conexion = new NpgsqlConnection(_cadenaOperador);
+        await conexion.OpenAsync(ct);
+        return await conexion.ExecuteScalarAsync<string?>(new CommandDefinition(
+            "SELECT ambiente FROM resumenes WHERE id = @resumenId",
+            new { resumenId }, cancellationToken: ct));
+    }
+
     private sealed record FilaCredenciales(
         string Ruc, string Ambiente, string? UsuarioSol,
         byte[]? ClaveCifrada, bool Activo);
@@ -312,5 +358,6 @@ public sealed class ProveedorCredenciales
     private sealed record FilaRevision(
         string Ruc, string RazonSocial, string? UsuarioSol, bool TieneClave,
         string Direccion, string Ubigeo, int Series, int Claves,
-        string? CertificadoSubject, DateTime? CertificadoVence);
+        string? CertificadoSubject, DateTime? CertificadoVence,
+        bool? CertificadoAutofirmado);
 }

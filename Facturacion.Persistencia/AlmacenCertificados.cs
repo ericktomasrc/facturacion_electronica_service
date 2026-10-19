@@ -109,10 +109,10 @@ public sealed class AlmacenCertificados
             """
             INSERT INTO certificados
                 (tenant_id, pfx_cifrado, clave_cifrada, subject, huella,
-                 valido_desde, valido_hasta, activo)
+                 valido_desde, valido_hasta, activo, emisor, autofirmado)
             VALUES
                 (@tenantId, @pfxCifrado, @claveCifrada, @subject, @huella,
-                 @validoDesde, @validoHasta, true)
+                 @validoDesde, @validoHasta, true, @emisor, @autofirmado)
             RETURNING id
             """,
             new
@@ -123,7 +123,12 @@ public sealed class AlmacenCertificados
                 subject = certificado.Subject,
                 huella = certificado.Thumbprint,
                 validoDesde = certificado.NotBefore.ToUniversalTime(),
-                validoHasta = certificado.NotAfter.ToUniversalTime()
+                validoHasta = certificado.NotAfter.ToUniversalTime(),
+                // 037: AUTOFIRMADO = quien lo emitió es él mismo (de prueba).
+                // Sirve en beta; SUNAT real lo rechaza todo.
+                emisor = certificado.Issuer,
+                autofirmado = certificado.SubjectName.RawData.AsSpan()
+                                  .SequenceEqual(certificado.IssuerName.RawData)
             },
             sesion.Transaccion, cancellationToken: ct));
 

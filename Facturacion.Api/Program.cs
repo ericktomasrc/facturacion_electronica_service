@@ -14,6 +14,9 @@ ConfiguracionSecretos.CargarArchivoEnv();
 
 var builder = WebApplication.CreateBuilder(args);
 
+// 038: LOGS EN ARCHIVO, una carpeta por día: ..\logs\AAAA-MM-DD\servicio-api.log
+builder.Logging.AddProvider(new ProveedorLogsArchivo("servicio-api", builder.Environment.ContentRootPath));
+
 // --- Servicios -------------------------------------------------------------
 
 var cadenaConexion = ConfiguracionSecretos.CadenaPostgres(
@@ -402,6 +405,9 @@ catch (InvalidOperationException ex)
     // por esto: se dice, y lo demás sigue.
     app.Logger.LogError("Secretos de webhook: no se pudieron cifrar. {Motivo}", ex.Message);
 }
+
+// 038: una línea por petición en el log del día.
+app.UseMiddleware<RegistroPeticiones>();
 
 // Sirve el panel desde wwwroot.
 app.UseDefaultFiles();

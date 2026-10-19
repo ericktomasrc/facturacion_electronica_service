@@ -48,6 +48,15 @@ paso "Bases"
 echo "  facturacion.dump $(du -h "$TMP/facturacion.dump" | cut -f1) · plataforma.dump $(du -h "$TMP/plataforma.dump" | cut -f1)"
 
 paso "Almacén"
+# 038 (QA, opción B′): los archivos están en Cloudflare R2. Se copian a otro
+# bucket con «rclone copy» (nunca borra: si algo se borra en el origen, la
+# copia lo conserva). Va aparte del .tar.gz, que solo lleva las bases.
+ORIGEN_ALM="$(leer ALMACEN_RCLONE_ORIGEN .env.base 2>/dev/null || true)"
+DESTINO_ALM="$(leer ALMACEN_RCLONE_DESTINO .env.base 2>/dev/null || true)"
+if [ -n "$ORIGEN_ALM" ] && [ -n "$DESTINO_ALM" ]; then
+    command -v rclone >/dev/null || falla "ALMACEN_RCLONE_ORIGEN está puesto pero rclone no está instalado."
+    rclone copy "$ORIGEN_ALM" "$DESTINO_ALM" && echo "  archivos de $ORIGEN_ALM copiados a $DESTINO_ALM"
+fi
 almacen="$("${DC[@]}" ps -q almacen 2>/dev/null || true)"
 if [ -n "$almacen" ]; then
     docker run --rm --volumes-from "$almacen" alpine:3.20 tar -C /data -cf - . > "$TMP/almacen.tar"
@@ -75,7 +84,7 @@ for f in "$DESTINO"/respaldo-*.tar.gz; do
     fi
 done
 
-DESTINO_REMOTO="$(leer RESPALDO_RCLONE_DESTINO .env 2>/dev/null || true)"
+DESTINO_REMOTO="$(leer RESPALDO_RCLONE_DESTINO .env.base 2>/dev/null || true)"
 if [ -n "$DESTINO_REMOTO" ]; then
     paso "Copia fuera del servidor"
     command -v rclone >/dev/null || falla "RESPALDO_RCLONE_DESTINO está puesto pero rclone no está instalado."

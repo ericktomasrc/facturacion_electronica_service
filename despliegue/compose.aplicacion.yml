@@ -1,0 +1,120 @@
+# =============================================================================
+# SERVIDOR DE APLICACIÓN (QA, opción B′) — Caddy, la plataforma (con el front)
+# y el servicio de facturación (API y Worker).
+#
+#   docker compose -f compose.aplicacion.yml --env-file .env.aplicacion up -d
+#
+# Lo explica GUIA-QA.md. Lo esencial:
+#   - Los únicos puertos abiertos son 80 y 443, y son de Caddy.
+#   - Las bases están en el OTRO servidor, por la red privada (POSTGRES_HOST
+#     en .env.servicio y Host= en .env.plataforma: la IP privada de la base).
+#   - Los archivos (XML, CDR, PDF, logos) van a Cloudflare R2: no hay MinIO.
+#   - Los logs por día (038) quedan en volúmenes: sobreviven a un reinicio.
+#     Para leerlos:  docker compose -f compose.aplicacion.yml exec plataforma ls /app/logs
+#   - Las imágenes se construyen en el PC o aquí (ver GUIA-QA.md).
+# =============================================================================
+
+name: reyban-app
+
+x-registro: &registro
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+services:
+
+  facturacion-api:
+    build:
+      context: ..
+      dockerfile: despliegue/servicio.Dockerfile
+      target: api
+    image: reyban/facturacion-api:local
+    <<: *registro
+    restart: unless-stopped
+    env_file: [.env.servicio]
+    environment:
+      PROXY_IP_CONFIABLE: 172.30.0.10      # Caddy (ver «interna» abajo)
+      LOGS_CARPETA: /app/logs
+    volumes:
+      - logs_servicio:/app/logs
+    networks: [interna]
+    mem_limit: 1g
+
+  # UNA SOLA COPIA, siempre: dos workers sobre la misma cola pueden enviar el
+  # mismo comprobante dos veces a SUNAT.
+  facturacion-worker:
+    build:
+      context: ..
+      dockerfile: despliegue/servicio.Dockerfile
+      target: worker
+    image: reyban/facturacion-worker:local
+    <<: *registro
+    restart: unless-stopped
+    env_file: [.env.servicio]
+    environment:
+      LOGS_CARPETA: /app/logs
+    volumes:
+      - logs_servicio:/app/logs
+    networks: [interna]
+    mem_limit: 1g
+
+  # La API sirve también el front (wwwroot).
+  plataforma:
+    build:
+      context: ${RUTA_PLATAFORMA:-../../../reyban_plataforma}
+      dockerfile: ${RUTA_KIT_DESDE_PLATAFORMA:-../facturacion electronica/facturacion_electronica_service/despliegue}/plataforma.Dockerfile
+    image: reyban/plataforma:local
+    <<: *registro
+    restart: unless-stopped
+    env_file: [.env.plataforma]
+    environment:
+      PROXY_IP_CONFIABLE: 172.30.0.10
+      LOGS_CARPETA: /app/logs
+    volumes:
+      - logs_plataforma:/app/logs
+    depends_on:
+      facturacion-api: { condition: service_started }
+    networks: [interna]
+    mem_limit: 768m
+
+  caddy:
+    image: caddy:2.8-alpine
+    <<: *registro
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMINIO_SERVICIO:   ${DOMINIO_SERVICIO:?falta en .env.aplicacion}
+      DOMINIO_PORTAL:     ${DOMINIO_PORTAL:?falta en .env.aplicacion}
+      DOMINIO_PLATAFORMA: ${DOMINIO_PLATAFORMA:?falta en .env.aplicacion}
+      CORREO_TLS:         ${CORREO_TLS:?falta en .env.aplicacion}
+      QA_IPS_PERMITIDAS:  ${QA_IPS_PERMITIDAS:?falta en .env.aplicacion}
+    volumes:
+      - ./Caddyfile.qa:/etc/caddy/Caddyfile:ro
+      - ./qa_usuarios.caddy:/etc/caddy/qa_usuarios.caddy:ro
+      - datos_caddy:/data
+      - config_caddy:/config
+    depends_on:
+      - facturacion-api
+      - plataforma
+    networks:
+      interna:
+        ipv4_address: 172.30.0.10        # fija: las API solo creen X-Forwarded-For de aquí
+    mem_limit: 256m
+
+networks:
+  interna:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          ip_range: 172.30.0.128/25    # las automáticas no llegan nunca a la .10 de Caddy
+
+volumes:
+  logs_servicio:
+  logs_plataforma:
+  datos_caddy:
+  config_caddy:

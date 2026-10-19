@@ -4,4 +4,7 @@
 !.env.ejemplo
 !.env.servicio.ejemplo
 !.env.plataforma.ejemplo
+!.env.*.ejemplo
+# 038: el usuario y la contraseña (cifrada) de la protección de QA.
+qa_usuarios.caddy
 respaldos/

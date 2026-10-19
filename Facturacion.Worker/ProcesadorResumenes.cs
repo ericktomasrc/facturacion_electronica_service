@@ -220,7 +220,9 @@ public sealed class ProcesadorResumenes
 
         var zip = EmpaquetadorZip.Comprimir(documento.NombreArchivo, bytes);
 
-        var configuracion = await _credenciales.ObtenerAsync(resumen.TenantId, ct);
+        // 036: al SUNAT de sus boletas (beta o producción), no al de la empresa hoy.
+        var configuracion = await _credenciales.ObtenerAsync(resumen.TenantId,
+            await _credenciales.AmbienteDeResumenAsync(resumen.Id, ct), ct);
 
         using var enviador = new EnviadorSunatSoap(configuracion);
 
@@ -275,7 +277,9 @@ public sealed class ProcesadorResumenes
         var tenant = await _cola.ObtenerTenantAsync(resumen.TenantId, ct)
             ?? throw new InvalidOperationException("El emisor ya no existe.");
 
-        var configuracion = await _credenciales.ObtenerAsync(resumen.TenantId, ct);
+        // 036: el ticket se pregunta al mismo SUNAT al que se envió.
+        var configuracion = await _credenciales.ObtenerAsync(resumen.TenantId,
+            await _credenciales.AmbienteDeResumenAsync(resumen.Id, ct), ct);
 
         using var enviador = new EnviadorSunatSoap(configuracion);
 

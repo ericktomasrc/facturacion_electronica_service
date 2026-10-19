@@ -563,20 +563,73 @@ public sealed class RepositorioAdmin
     /// producción sin certificado válido o sin clave SOL hace que todas sus
     /// facturas fallen desde el primer minuto.
     /// </summary>
+    public Task<bool> CambiarAmbienteAsync(
+        Guid tenantId, string ambiente, CancellationToken ct = default) =>
+        CambiarAmbienteAsync(tenantId, ambiente, "panel", null, ct);
+
+    /// <summary>
+    /// 036: el cambio queda en `ambiente_cambios` con su origen (panel o
+    /// plataforma). Al pasar a producción por primera vez, cada serie activa
+    /// de prueba se crea también en real, EMPEZANDO EN 0: los números de
+    /// prueba no cuentan. Si ya existía en real, sigue donde iba. Si la
+    /// empresa ya emitía con esa serie en otro sistema, se ajusta después
+    /// («Ajustar la serie», solo hacia arriba).
+    /// </summary>
     public async Task<bool> CambiarAmbienteAsync(
-        Guid tenantId, string ambiente, CancellationToken ct = default)
+        Guid tenantId, string ambiente, string origen, string? detalle,
+        CancellationToken ct = default)
     {
         if (ambiente is not ("beta" or "produccion"))
             throw new ArgumentException(
                 "El ambiente solo puede ser 'beta' o 'produccion'.", nameof(ambiente));
 
         await using var conexion = await AbrirAsync(ct);
+        await using var tx = await conexion.BeginTransactionAsync(ct);
+
+        await conexion.ExecuteAsync(new CommandDefinition(
+            """
+            SELECT set_config('app.origen_cambio', @origen, true),
+                   set_config('app.detalle_cambio', @detalle, true)
+            """,
+            new { origen, detalle = detalle ?? "" }, tx, cancellationToken: ct));
 
         var filas = await conexion.ExecuteAsync(new CommandDefinition(
             "UPDATE tenants SET ambiente = @ambiente WHERE id = @tenantId",
-            new { tenantId, ambiente }, cancellationToken: ct));
+            new { tenantId, ambiente }, tx, cancellationToken: ct));
 
+        if (filas > 0 && ambiente == "produccion")
+        {
+            await conexion.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO series_por_ambiente
+                       (tenant_id, tipo_comprobante, serie, ultimo_correlativo, activo, ambiente)
+                SELECT tenant_id, tipo_comprobante, serie, 0, true, 'produccion'
+                  FROM series_por_ambiente
+                 WHERE tenant_id = @tenantId
+                   AND ambiente = 'beta'
+                   AND activo
+                ON CONFLICT DO NOTHING
+                """,
+                new { tenantId }, tx, cancellationToken: ct));
+        }
+
+        await tx.CommitAsync(ct);
         return filas > 0;
+    }
+
+    /// <summary>036: la serie del ambiente actual de la empresa, por tipo y nombre.</summary>
+    public async Task<Guid?> SerieIdAsync(
+        Guid tenantId, string tipoComprobante, string serie, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+        return await conexion.ExecuteScalarAsync<Guid?>(new CommandDefinition(
+            """
+            SELECT id FROM series
+             WHERE tenant_id = @tenantId
+               AND tipo_comprobante = @tipoComprobante
+               AND serie = @serie
+            """,
+            new { tenantId, tipoComprobante, serie }, cancellationToken: ct));
     }
 
     // --------------------------------------------------------------- series
@@ -651,7 +704,7 @@ public sealed class RepositorioAdmin
             """
             INSERT INTO series (tenant_id, tipo_comprobante, serie, ultimo_correlativo)
             VALUES (@tenantId, @tipoComprobante, @serie, @correlativoInicial)
-            ON CONFLICT (tenant_id, tipo_comprobante, serie) DO NOTHING
+            ON CONFLICT DO NOTHING   -- 036: el candado ahora incluye el ambiente
             RETURNING id
             """,
             new { tenantId, tipoComprobante, serie, correlativoInicial },
@@ -668,7 +721,8 @@ public sealed class RepositorioAdmin
                            (SELECT count(*)::int FROM comprobantes c
                              WHERE c.tenant_id = s.tenant_id
                                AND c.tipo_comprobante = s.tipo_comprobante
-                               AND c.serie = s.serie) AS "Comprobantes"
+                               AND c.serie = s.serie
+                               AND c.ambiente = s.ambiente) AS "Comprobantes"
                       FROM series s
                      WHERE s.tenant_id = @tenantId
                        AND s.tipo_comprobante = @tipoComprobante
@@ -710,7 +764,7 @@ public sealed class RepositorioAdmin
     /// </summary>
     public async Task<AjusteSerie> AjustarCorrelativoAsync(
         Guid tenantId, Guid serieId, int hasta, string motivo,
-        Guid usuarioId, string correo, CancellationToken ct = default)
+        Guid? usuarioId, string correo, CancellationToken ct = default)
     {
         await using var conexion = await AbrirAsync(ct);
         await using var tx = await conexion.BeginTransactionAsync(ct);
@@ -829,7 +883,8 @@ public sealed class RepositorioAdmin
                      SELECT 1 FROM comprobantes c
                       WHERE c.tenant_id = s.tenant_id
                         AND c.tipo_comprobante = s.tipo_comprobante
-                        AND c.serie = s.serie)
+                        AND c.serie = s.serie
+                        AND c.ambiente = s.ambiente)
             """,
             new { tenantId, serieId }, cancellationToken: ct));
 

@@ -164,6 +164,10 @@ public sealed class RepositorioBajas
                      WHERE id = @id
                        AND baja_id IS NULL
                        AND estado IN ('ACEPTADO','ACEPTADO_CON_OBSERVACIONES')
+                       -- 036: solo comprobantes del ambiente de la comunicación
+                       -- (el de la empresa ahora). Uno de prueba no se da de
+                       -- baja ante el SUNAT real, ni al revés.
+                       AND ambiente = (SELECT r.ambiente FROM resumenes r WHERE r.id = @bajaId)
                     """,
                     new { bajaId, id, motivo },
                     sesion.Transaccion, cancellationToken: ct));

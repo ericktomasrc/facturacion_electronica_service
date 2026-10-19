@@ -239,6 +239,148 @@ public static class EndpointsConfiguracion
             "confirmado=true (si no, 422). Si la serie ya existe, 409 y no se toca. Las altas con " +
             "número inicial quedan en la bitácora de correlativos.");
 
+        // 036: AJUSTAR LA SERIE desde la plataforma, SOLO HACIA ARRIBA. Para
+        // dos casos: la empresa ya emitía con esa serie en otro sistema (pasa
+        // a real y su F001 real empieza en 0), o SUNAT respondió 1033 («ese
+        // número ya existe»). Es el mismo «Ajustar correlativo» del panel,
+        // con su candado y su anotación en la bitácora de correlativos.
+        grupo.MapPost("/series/ajustar", async (
+            SerieAjusteDesdePlataforma a, ContextoEmisor emisor,
+            RepositorioAdmin admin, CancellationToken ct) =>
+        {
+            var tenant = emisor.Exigir();
+            var tipo = a.TipoComprobante?.Trim() ?? "";
+            var serie = a.Serie?.Trim().ToUpperInvariant() ?? "";
+            var motivo = a.Motivo?.Trim() ?? "";
+
+            if (ProblemaSerie(tipo, serie) is { } problema)
+                return Results.BadRequest(new RespuestaError("Serie inválida.", problema));
+
+            if (a.UltimoCorrelativo is < 1 or > CorrelativoMaximo)
+                return Results.BadRequest(new RespuestaError(
+                    "Último número inválido.", $"Va de 1 a {CorrelativoMaximo}: el último que realmente emitiste."));
+
+            if (motivo.Length < 5)
+                return Results.BadRequest(new RespuestaError(
+                    "Falta el motivo.", "Por qué se ajusta. Queda en la bitácora de correlativos."));
+
+            var id = await admin.SerieIdAsync(tenant.Id, tipo, serie, ct);
+            if (id is null)
+                return Results.NotFound(new RespuestaError($"La empresa no tiene la serie {serie} en este ambiente."));
+
+            var quien = "plataforma: " + Recortar(string.IsNullOrWhiteSpace(a.Actor) ? "sin nombre" : a.Actor.Trim(), 200);
+            var r = await admin.AjustarCorrelativoAsync(
+                tenant.Id, id.Value, a.UltimoCorrelativo, Recortar(motivo, 500), null, quien, ct);
+
+            return r.Resultado switch
+            {
+                ResultadoAjuste.Ajustado => Results.Ok(new
+                {
+                    desde = r.Desde,
+                    hasta = r.Hasta,
+                    siguiente = Numero(serie, r.Hasta + 1),
+                    mensaje = $"Serie {serie} ajustada: la siguiente saldrá {Numero(serie, r.Hasta + 1)}."
+                }),
+                ResultadoAjuste.NoSube => Results.Conflict(new
+                {
+                    error = $"La {serie} ya va en la {r.Desde}.",
+                    detalle = "Solo se puede subir: bajar volvería a dar números que ya existen en SUNAT.",
+                    codigo = "no_sube"
+                }),
+                _ => Results.NotFound(new RespuestaError($"No se encontró la serie {serie}."))
+            };
+        })
+        .WithSummary("Sube el último número de una serie (solo hacia arriba)")
+        .WithDescription("Queda en la bitácora de correlativos con su motivo. 409 si no sube.");
+
+        // =====================================================================
+        // 036: EL AMBIENTE (el interruptor «Conexión con SUNAT» de la plataforma)
+        //
+        //   GET  /v1/configuracion/ambiente   en qué SUNAT está y si puede pasar a real
+        //   POST /v1/configuracion/ambiente   { ambiente: "produccion" | "beta" }
+        //
+        // DOS LLAVES A LA VEZ: la fac_ de la empresa (dice CUÁL) y la clave de
+        // alta de la plataforma en X-Clave-Alta (dice que lo pide la
+        // plataforma, no un tercero). Una fac_ filtrada sola no puede cambiar
+        // el ambiente; la alt_ sola no puede tocar una empresa que ya existe.
+        // Pasar a real exige la misma revisión que el panel. Volver a beta
+        // siempre se permite. Todo queda en ambiente_cambios.
+        // =====================================================================
+        grupo.MapGet("/ambiente", async (
+            HttpContext http, ContextoEmisor emisor, RepositorioAltas altas,
+            ProveedorCredenciales credenciales, CancellationToken ct) =>
+        {
+            var tenant = emisor.Exigir();
+            if (await ClaveAltaDe(http, altas, ct) is null)
+                return SinClaveAlta();
+
+            var revision = await credenciales.RevisarAsync(tenant.Id, ct);
+            var interna = tenant.Ruc == PruebaMadrugada.RucInterno;
+
+            return Results.Ok(new
+            {
+                ambiente = tenant.Ambiente,
+                puedeProduccion = revision.Listo && !interna,
+                faltantes = interna
+                    ? new[] { "Es la empresa de control de la prueba de madrugada: siempre en beta." }
+                    : revision.Faltantes.ToArray(),
+                advertencias = revision.Advertencias.ToArray()
+            });
+        })
+        .WithSummary("En qué SUNAT emite la empresa y si puede pasar a real (fac_ + X-Clave-Alta)");
+
+        grupo.MapPost("/ambiente", async (
+            CambioAmbienteDesdePlataforma p, HttpContext http, ContextoEmisor emisor,
+            RepositorioAltas altas, RepositorioAdmin admin, ProveedorCredenciales credenciales,
+            CancellationToken ct) =>
+        {
+            var tenant = emisor.Exigir();
+            var clave = await ClaveAltaDe(http, altas, ct);
+            if (clave is null)
+                return SinClaveAlta();
+
+            var ambiente = p.Ambiente?.Trim().ToLowerInvariant();
+            if (ambiente is not ("beta" or "produccion"))
+                return Results.BadRequest(new RespuestaError("El ambiente es «beta» o «produccion»."));
+
+            if (tenant.Ambiente == ambiente)
+                return Results.Ok(new { ambiente, cambiado = false, mensaje = "Ya estaba así." });
+
+            if (ambiente == "produccion")
+            {
+                if (tenant.Ruc == PruebaMadrugada.RucInterno)
+                    return Results.Conflict(new RespuestaError(
+                        "La empresa de control de la madrugada siempre está en beta."));
+
+                var revision = await credenciales.RevisarAsync(tenant.Id, ct);
+                if (!revision.Listo)
+                    return Results.UnprocessableEntity(new
+                    {
+                        error = $"{tenant.RazonSocial} todavía no puede emitir en SUNAT real.",
+                        detalle = string.Join(" ", revision.Faltantes),
+                        codigo = "no_lista"
+                    });
+            }
+
+            var quien = string.IsNullOrWhiteSpace(p.Quien) ? "" : " · " + Recortar(p.Quien.Trim(), 200);
+            await admin.CambiarAmbienteAsync(
+                tenant.Id, ambiente, "plataforma", $"clave-alta:{clave.Prefijo}{quien}", ct);
+
+            return Results.Ok(new
+            {
+                ambiente,
+                cambiado = true,
+                mensaje = ambiente == "produccion"
+                    ? $"{tenant.RazonSocial} emite ahora en SUNAT real. Sus series reales empiezan en 0; si ya emitía con ellas en otro sistema, ajústalas."
+                    : $"{tenant.RazonSocial} volvió a SUNAT beta (pruebas). Lo emitido en real sigue siendo real."
+            });
+        })
+        .WithSummary("Pasa la empresa a SUNAT real o la devuelve a beta (fac_ + X-Clave-Alta)")
+        .WithDescription(
+            "Producción exige la revisión del panel (certificado real, SOL, series); si falta algo, 422 " +
+            "con codigo no_lista. Al pasar a producción, cada serie activa se crea también en real, " +
+            "empezando en 0. Volver a beta siempre se permite.");
+
         // ---------------------------------------------------------------- marca
 
         grupo.MapPut("/marca", async (
@@ -520,6 +662,20 @@ public static class EndpointsConfiguracion
 
     private static string Numero(string serie, int correlativo) => $"{serie}-{correlativo:D8}";
 
+    /// <summary>036: la clave de alta de X-Clave-Alta, si vale (null si no viene o no vale).</summary>
+    private static async Task<ClaveAltaResuelta?> ClaveAltaDe(
+        HttpContext http, RepositorioAltas altas, CancellationToken ct)
+    {
+        var clave = http.Request.Headers[AutenticacionClaveAlta.Cabecera].ToString().Trim();
+        return clave.Length == 0 ? null : await altas.ResolverClaveAsync(clave, ct);
+    }
+
+    private static IResult SinClaveAlta() =>
+        Results.Json(new RespuestaError(
+                "Cambiar el ambiente lo pide solo la plataforma.",
+                $"Falta la clave de alta en {AutenticacionClaveAlta.Cabecera}, o no vale."),
+            statusCode: StatusCodes.Status403Forbidden);
+
     private static string Recortar(string texto, int largo) =>
         texto.Length <= largo ? texto : texto[..largo];
 
@@ -532,6 +688,13 @@ public static class EndpointsConfiguracion
 
 /// <param name="UltimoCorrelativo">El último número ya emitido con esta serie en otro sistema; 0 si ninguno.</param>
 /// <param name="Actor">Quién lo hace en la plataforma (su correo o alias). Solo para la bitácora.</param>
+/// <summary>036: cuerpo de POST /v1/configuracion/ambiente.</summary>
+public record CambioAmbienteDesdePlataforma(string? Ambiente, string? Quien);
+
+/// <summary>036: cuerpo de POST /v1/configuracion/series/ajustar.</summary>
+public record SerieAjusteDesdePlataforma(
+    string? TipoComprobante, string? Serie, int UltimoCorrelativo, string? Motivo, string? Actor);
+
 public record SerieDesdePlataforma(
     string? TipoComprobante, string? Serie, int UltimoCorrelativo, bool Confirmado, string? Actor);
 

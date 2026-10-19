@@ -180,7 +180,8 @@ public sealed class RepositorioPortal
                    AND c.estado IN {EstadosVisibles}
                    AND c.cpe->'receptor'->>'tipoDocumento'   = @TipoDocumento
                    AND c.cpe->'receptor'->>'numeroDocumento' = @NumeroDocumento
-                 ORDER BY c.tipo_comprobante
+                 ORDER BY (c.ambiente = 'produccion') DESC,   -- 036: el real antes que el de prueba
+                          c.tipo_comprobante
                  LIMIT 1
                 """,
                 new

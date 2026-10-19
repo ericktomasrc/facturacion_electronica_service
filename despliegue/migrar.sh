@@ -17,7 +17,8 @@
 #   - Al final corre verificar.sql de la plataforma como plataforma_app, dentro
 #     de una transacción que se deshace: no deja datos de prueba.
 #
-# Las bases tienen que estar arriba:  docker compose -f docker-compose.produccion.yml up -d db-facturacion db-plataforma
+# Se corre en el SERVIDOR DE BASE (QA, opción B′, GUIA-QA.md), con las bases
+# arriba:  docker compose -f compose.base.yml --env-file .env.base up -d
 # =============================================================================
 # shellcheck source=comun.sh
 source "$(dirname "$0")/comun.sh"
@@ -30,14 +31,15 @@ fi
 [ -d "$MIG_SERVICIO" ]   || falla "No encuentro las migraciones del servicio en $MIG_SERVICIO."
 [ -d "$MIG_PLATAFORMA" ] || falla "No encuentro las migraciones de la plataforma en $MIG_PLATAFORMA (mira RUTA_PLATAFORMA en .env)."
 
-P_APP="$(leer FACTURACION_APP_PASSWORD .env.servicio)"
-P_OPE="$(leer FACTURACION_OPERADOR_PASSWORD .env.servicio)"
-P_ALTA="$(leer FACTURACION_ALTA_PASSWORD .env.servicio)"
-CADENA_PLA="$(leer PLATAFORMA_CADENA_CONEXION .env.plataforma)"
-P_PLA="$(printf '%s' "$CADENA_PLA" | tr ';' '\n' | grep -i '^[[:space:]]*Password=' | head -n 1 | cut -d= -f2- || true)"
+# 038: las contraseñas de los roles, del .env.base de este servidor (las
+# mismas que usan las aplicaciones en el servidor de aplicación).
+P_APP="$(leer FACTURACION_APP_PASSWORD .env.base)"
+P_OPE="$(leer FACTURACION_OPERADOR_PASSWORD .env.base)"
+P_ALTA="$(leer FACTURACION_ALTA_PASSWORD .env.base)"
+P_PLA="$(leer PLATAFORMA_APP_PASSWORD .env.base)"
 
 for v in P_APP P_OPE P_ALTA P_PLA; do
-    [ -n "${!v}" ] || falla "Falta una contraseña de rol ($v) en .env.servicio o .env.plataforma."
+    [ -n "${!v}" ] || falla "Falta una contraseña de rol ($v) en .env.base."
     case "${!v}" in *CAMBIAR*) falla "Una contraseña de rol ($v) sigue con el valor de ejemplo.";; esac
 done
 
@@ -116,4 +118,4 @@ echo "$salida" | grep -q "TODAS LAS COMPROBACIONES PASARON" || falla "verificar.
 echo "  TODAS LAS COMPROBACIONES PASARON"
 
 echo
-echo "Listo. Ahora:  docker compose -f docker-compose.produccion.yml up -d"
+echo "Listo. Ahora, en el SERVIDOR DE APLICACIÓN:  docker compose -f compose.aplicacion.yml --env-file .env.aplicacion up -d"

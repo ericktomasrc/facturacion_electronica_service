@@ -67,8 +67,11 @@ case "$MODO" in
 
 --de-verdad)
     [ "${3:-}" = "--borra-lo-actual" ] || falla "Esto reemplaza las bases de producción. Si es lo que quieres, añade --borra-lo-actual."
-    paso "Deteniendo API, Worker, plataforma y almacén"
-    "${DC[@]}" stop facturacion-api facturacion-worker plataforma almacen
+    # 038 (QA, opción B′): la aplicación vive en el OTRO servidor.
+    paso "La aplicación tiene que estar detenida"
+    echo "  En el SERVIDOR DE APLICACIÓN:  docker compose -f compose.aplicacion.yml --env-file .env.aplicacion stop"
+    read -r -p "  ¿Ya está detenida? Escribe SI para seguir: " detenida
+    [ "$detenida" = "SI" ] || falla "Cancelado. No se tocó nada."
     paso "Roles (un pg_dump no los lleva; en un servidor nuevo no existen)"
     "${DC[@]}" up -d db-facturacion db-plataforma
     sleep 5
@@ -90,7 +93,7 @@ case "$MODO" in
     "${DC[@]}" up -d
     echo "Las contraseñas de los roles: corre ./migrar.sh ahora (las pone desde los .env; no repite migraciones)."
     echo
-    echo "Restaurado. Revisa: docker compose -f docker-compose.produccion.yml logs -f --tail 50"
+    echo "Restaurado. En el SERVIDOR DE APLICACIÓN: docker compose -f compose.aplicacion.yml --env-file .env.aplicacion up -d"
     ;;
 *)
     falla "Modo desconocido: $MODO"

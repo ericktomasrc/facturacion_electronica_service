@@ -7,7 +7,8 @@ set -euo pipefail
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$AQUI"
 
-DC=(docker compose -f "$AQUI/docker-compose.produccion.yml")
+# 038 (QA, opción B′): estos scripts corren en el SERVIDOR DE BASE.
+DC=(docker compose -f "$AQUI/compose.base.yml" --env-file "$AQUI/.env.base")
 
 falla() { echo "ERROR: $*" >&2; exit 1; }
 paso()  { echo; echo "== $*"; }
@@ -31,7 +32,7 @@ psql_pla() { "${DC[@]}" exec -T db-plataforma  psql -U postgres          -d plat
 # Un texto como literal SQL: comillas simples dobladas.
 literal() { local t="$1"; printf "'%s'" "${t//\'/\'\'}"; }
 
-RUTA_PLATAFORMA="$(leer RUTA_PLATAFORMA "$AQUI/.env" 2>/dev/null || true)"
+RUTA_PLATAFORMA="$(leer RUTA_PLATAFORMA "$AQUI/.env.base" 2>/dev/null || true)"
 RUTA_PLATAFORMA="${RUTA_PLATAFORMA:-../../../reyban_plataforma}"
 MIG_SERVICIO="$AQUI/../migraciones"
 MIG_PLATAFORMA="$AQUI/$RUTA_PLATAFORMA/reyban_plataforma_service/migraciones"

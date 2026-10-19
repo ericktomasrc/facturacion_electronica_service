@@ -250,10 +250,20 @@ public sealed class RepositorioResumenes
                 """
                 INSERT INTO resumenes
                     (tenant_id, tipo, identificador, fecha_referencia,
-                     fecha_generacion, correlativo, estado)
+                     fecha_generacion, correlativo, estado, ambiente)
                 VALUES
                     (@tenantId, 'RC', @identificador, @fechaEmision,
-                     @hoy, @correlativo, 'ENCOLADO')
+                     @hoy, @correlativo, 'ENCOLADO',
+                     -- 036: un resumen, un ambiente. Primero las de beta; las
+                     -- de producción salen en la vuelta siguiente (1 minuto).
+                     (SELECT min(ambiente) FROM comprobantes
+                       WHERE tenant_id = @tenantId
+                         AND tipo_comprobante IN ('03','07','08')
+                         AND serie LIKE 'B%'
+                         AND estado IN ('ACEPTADO','ACEPTADO_CON_OBSERVACIONES')
+                         AND baja_motivo IS NOT NULL
+                         AND baja_id IS NULL
+                         AND fecha_emision = @fechaEmision))
                 RETURNING id
                 """,
                 new
@@ -286,6 +296,7 @@ public sealed class RepositorioResumenes
                        AND baja_motivo IS NOT NULL
                        AND baja_id IS NULL
                        AND fecha_emision = @fechaEmision
+                       AND ambiente = (SELECT r.ambiente FROM resumenes r WHERE r.id = @resumenId)
                      ORDER BY correlativo
                      FOR UPDATE SKIP LOCKED
                 )
@@ -373,10 +384,18 @@ public sealed class RepositorioResumenes
                 """
                 INSERT INTO resumenes
                     (tenant_id, tipo, identificador, fecha_referencia,
-                     fecha_generacion, correlativo, estado)
+                     fecha_generacion, correlativo, estado, ambiente)
                 VALUES
                     (@tenantId, 'RC', @identificador, @fechaEmision,
-                     @hoy, @correlativo, 'ENCOLADO')
+                     @hoy, @correlativo, 'ENCOLADO',
+                     -- 036: un resumen, un ambiente. Primero las de beta; las
+                     -- de producción salen en la vuelta siguiente (1 minuto).
+                     (SELECT min(ambiente) FROM comprobantes
+                       WHERE tenant_id = @tenantId
+                         AND tipo_comprobante = '03'
+                         AND estado = 'BORRADOR'
+                         AND resumen_id IS NULL
+                         AND fecha_emision = @fechaEmision))
                 RETURNING id
                 """,
                 new
@@ -402,6 +421,7 @@ public sealed class RepositorioResumenes
                        AND estado = 'BORRADOR'
                        AND resumen_id IS NULL
                        AND fecha_emision = @fechaEmision
+                       AND ambiente = (SELECT r.ambiente FROM resumenes r WHERE r.id = @resumenId)
                      ORDER BY correlativo
                      FOR UPDATE SKIP LOCKED
                 )

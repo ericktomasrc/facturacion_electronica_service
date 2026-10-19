@@ -92,7 +92,9 @@ public static class EndpointsEstadoSunat
                 "llego es el estado de su resumen, no esta consulta."));
         }
 
-        var configuracion = await credenciales.ObtenerAsync(tenant.Id, ct);
+        // 036: se pregunta al SUNAT donde nació el comprobante.
+        var configuracion = await credenciales.ObtenerAsync(tenant.Id,
+            await credenciales.AmbienteDeComprobanteAsync(id, ct), ct);
 
         using var consultor = new ConsultorCpeSunat(configuracion);
 

@@ -421,6 +421,8 @@ public sealed class RepositorioComprobantes
                  WHERE tipo_comprobante = @tipoComprobante
                    AND serie = @serie
                    AND correlativo = @correlativo
+                   -- 036: el del ambiente actual (F001-1 de prueba y F001-1 real son dos)
+                   AND ambiente = (SELECT t.ambiente FROM tenants t WHERE t.id = comprobantes.tenant_id)
                 """,
                 new { tipoComprobante, serie, correlativo },
                 sesion.Transaccion, cancellationToken: ct));
@@ -490,7 +492,7 @@ public sealed class RepositorioComprobantes
             """
             INSERT INTO series (tenant_id, tipo_comprobante, serie)
             VALUES (@tenantId, @tipo, @serie)
-            ON CONFLICT (tenant_id, tipo_comprobante, serie) DO NOTHING
+            ON CONFLICT DO NOTHING   -- 036: el candado ahora incluye el ambiente
             """,
             new { tenantId, tipo = tipoComprobante, serie },
             sesion.Transaccion, cancellationToken: ct));

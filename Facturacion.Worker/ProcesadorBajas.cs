@@ -182,7 +182,8 @@ public sealed class ProcesadorBajas
         //
         // La comunicación de baja (RA) sí va por el de facturas, porque los
         // documentos que anula son facturas.
-        var configuracion = (await _credenciales.ObtenerAsync(baja.TenantId, ct))
+        var configuracion = (await _credenciales.ObtenerAsync(baja.TenantId,
+                await _credenciales.AmbienteDeResumenAsync(baja.Id, ct), ct))
             .ParaTipo(baja.Tipo == TipoComunicacionBaja.Reversion
                 ? ComprobanteRetencion.Tipo
                 : TipoComprobante.Factura);
@@ -239,7 +240,8 @@ public sealed class ProcesadorBajas
 
         // EL MISMO SERVICIO QUE SE USO PARA ENVIAR, y no es un detalle: el
         // ticket lo emitió uno de los dos y el otro no sabe nada de él.
-        var configuracion = (await _credenciales.ObtenerAsync(baja.TenantId, ct))
+        var configuracion = (await _credenciales.ObtenerAsync(baja.TenantId,
+                await _credenciales.AmbienteDeResumenAsync(baja.Id, ct), ct))
             .ParaTipo(baja.Tipo == TipoComunicacionBaja.Reversion
                 ? ComprobanteRetencion.Tipo
                 : TipoComprobante.Factura);

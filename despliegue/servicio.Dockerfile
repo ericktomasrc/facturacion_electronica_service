@@ -35,6 +35,8 @@ ENV TZ=America/Lima \
     ASPNETCORE_ENVIRONMENT=Production \
     DOTNET_ENVIRONMENT=Production
 WORKDIR /app
+# 038: los logs por día. La carpeta es del usuario de la app (el resto de /app no).
+RUN mkdir -p /app/logs && chown $APP_UID /app/logs
 
 # ------------------------------------------------------------------------ API
 FROM base AS api

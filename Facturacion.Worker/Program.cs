@@ -8,6 +8,9 @@ ConfiguracionSecretos.CargarArchivoEnv();
 
 var builder = Host.CreateApplicationBuilder(args);
 
+// 038: LOGS EN ARCHIVO, una carpeta por día: ..\logs\AAAA-MM-DD\servicio-worker.log
+builder.Logging.AddProvider(new ProveedorLogsArchivo("servicio-worker", builder.Environment.ContentRootPath));
+
 // --- Configuración ---------------------------------------------------------
 
 var cadenaApp = ConfiguracionSecretos.CadenaPostgres(

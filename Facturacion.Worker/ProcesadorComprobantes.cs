@@ -195,7 +195,9 @@ public sealed class ProcesadorComprobantes
             // pruebas, en producción descifra las del contribuyente. El worker
             // no necesita saber cuál es cuál.
             var configuracion =
-                (await _credenciales.ObtenerAsync(trabajo.TenantId, ct))
+                // 036: al SUNAT donde nació el comprobante (beta o producción).
+                (await _credenciales.ObtenerAsync(trabajo.TenantId,
+                    await _credenciales.AmbienteDeComprobanteAsync(trabajo.Id, ct), ct))
                     .ParaTipo(comprobante.TipoComprobante);
 
             // ESA LLAMADA A ParaTipo NO ES DECORATIVA.
