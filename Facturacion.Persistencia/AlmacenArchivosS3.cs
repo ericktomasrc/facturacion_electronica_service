@@ -126,7 +126,16 @@ public sealed class AlmacenArchivosS3 : IAlmacenArchivos, IDisposable
             // Se calcula el resumen del contenido para que el servidor
             // verifique que llegó íntegro. Un archivo corrupto en un CDR
             // no se detectaría hasta que alguien lo necesite, años después.
-            AutoCloseStream = false
+            AutoCloseStream = false,
+
+            // 20 oct 2026 — CLOUDFLARE R2 no acepta la firma «por trozos»
+            // (STREAMING-AWS4-HMAC-SHA256-PAYLOAD) que el SDK usa por defecto
+            // y respondía «not implemented». Se manda el archivo entero, sin
+            // firmar el cuerpo: viaja por HTTPS y la firma de la petición
+            // sigue. Es lo que indica la documentación de R2 para .NET, y
+            // MinIO y AWS S3 lo aceptan igual.
+            UseChunkEncoding = false,
+            DisablePayloadSigning = true
         }, ct);
 
         return ruta;
