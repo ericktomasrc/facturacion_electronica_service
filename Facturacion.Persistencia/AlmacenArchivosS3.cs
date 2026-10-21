@@ -73,6 +73,11 @@ public sealed class AlmacenArchivosS3 : IAlmacenArchivos, IDisposable
     private readonly IAmazonS3 _cliente;
     private readonly string _bucket;
 
+    // ¿Se habla con el almacén por HTTPS? (R2 y AWS sí; MinIO en tu PC, no.)
+    // Solo entonces se puede mandar el cuerpo sin firmar: el SDK lo prohíbe
+    // por HTTP, y con razón.
+    private readonly bool _https;
+
     public AlmacenArchivosS3(OpcionesAlmacen opciones)
     {
         if (string.IsNullOrWhiteSpace(opciones.Bucket))
@@ -80,6 +85,8 @@ public sealed class AlmacenArchivosS3 : IAlmacenArchivos, IDisposable
                 "Falta el nombre del bucket.", nameof(opciones));
 
         _bucket = opciones.Bucket;
+        _https = string.IsNullOrWhiteSpace(opciones.Endpoint) ||
+                 opciones.Endpoint.Trim().StartsWith("https://", StringComparison.OrdinalIgnoreCase);
 
         var configuracion = new AmazonS3Config
         {
@@ -130,12 +137,14 @@ public sealed class AlmacenArchivosS3 : IAlmacenArchivos, IDisposable
 
             // 20 oct 2026 — CLOUDFLARE R2 no acepta la firma «por trozos»
             // (STREAMING-AWS4-HMAC-SHA256-PAYLOAD) que el SDK usa por defecto
-            // y respondía «not implemented». Se manda el archivo entero, sin
-            // firmar el cuerpo: viaja por HTTPS y la firma de la petición
-            // sigue. Es lo que indica la documentación de R2 para .NET, y
-            // MinIO y AWS S3 lo aceptan igual.
+            // y respondía «not implemented». Se manda el archivo entero.
             UseChunkEncoding = false,
-            DisablePayloadSigning = true
+
+            // 21 oct 2026 — Sin firmar el cuerpo SOLO por HTTPS (R2, como
+            // indica su documentación para .NET). Por HTTP (MinIO en tu PC)
+            // el SDK lo rechaza: «When DisablePayloadSigning is true, the
+            // request must be sent over HTTPS». Ahí el cuerpo va firmado.
+            DisablePayloadSigning = _https
         }, ct);
 
         return ruta;
