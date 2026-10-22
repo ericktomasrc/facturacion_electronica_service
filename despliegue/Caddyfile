@@ -21,8 +21,15 @@
 		-Server
 	}
 	# Los .pfx, los logos y el paquete de esquemas XSD (hasta 25 MB) caben.
-	request_body {
+	# 042: el padrón de SUNAT que se sube a mano pesa cientos de MB: solo esa
+	# ruta admite hasta 2 GB (y exige sesión con permiso en la plataforma).
+	@subida_padron path /api/admin/consultas-sunat/padron/subir
+	@no_subida_padron not path /api/admin/consultas-sunat/padron/subir
+	request_body @no_subida_padron {
 		max_size 30MB
+	}
+	request_body @subida_padron {
+		max_size 2GB
 	}
 }
 

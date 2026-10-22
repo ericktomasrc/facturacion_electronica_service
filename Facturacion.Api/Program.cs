@@ -170,6 +170,9 @@ builder.Services.AddHostedService<ServicioVigilanciaCatalogo>();
 builder.Services.AddSingleton(new RepositorioMadrugada(cadenaOperador));
 builder.Services.AddSingleton<PruebaMadrugada>();
 builder.Services.AddHostedService<ServicioMadrugada>();
+// 22 oct: para pedirle a la plataforma el estado de su padrón de SUNAT.
+builder.Services.AddHttpClient(EndpointsPadronPlataforma.NombreCliente, c => c.Timeout = TimeSpan.FromSeconds(8));
+
 builder.Services.AddHttpClient("madrugada", cliente =>
     {
         cliente.BaseAddress = new Uri(ConfiguracionSecretos.Opcional(
@@ -427,6 +430,7 @@ app.MapearVigilancia();
 app.MapearVigilanciaPaginas();
 app.MapearPruebaMadrugada();
 app.MapearVigilanciaCatalogo();
+app.MapearVigilanciaPadron();   // 22 oct: el padrón de SUNAT de la plataforma (solo ver)
 app.MapearEsquemasXsd();          // 033: subir los esquemas XSD y ver los avisos
 app.MapearRevocarClave();          // punto 21: POST /v1/clave/revocar
 if (cadenaAlta is null)

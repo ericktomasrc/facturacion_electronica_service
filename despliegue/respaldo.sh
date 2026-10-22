@@ -44,7 +44,9 @@ sed 's/^/  /' "$TMP/conteos.txt"
 
 paso "Bases"
 "${DC[@]}" exec -T db-facturacion pg_dump -U facturacion_owner -d facturacion -Fc > "$TMP/facturacion.dump"
-"${DC[@]}" exec -T db-plataforma  pg_dump -U postgres          -d plataforma  -Fc > "$TMP/plataforma.dump"
+# 042: sin los datos del padrón de SUNAT (tablas UNLOGGED, ~18 millones de
+# RUC): es un archivo público que se vuelve a bajar cada madrugada.
+"${DC[@]}" exec -T db-plataforma  pg_dump -U postgres          -d plataforma  -Fc --no-unlogged-table-data > "$TMP/plataforma.dump"
 echo "  facturacion.dump $(du -h "$TMP/facturacion.dump" | cut -f1) · plataforma.dump $(du -h "$TMP/plataforma.dump" | cut -f1)"
 
 paso "Almacén"

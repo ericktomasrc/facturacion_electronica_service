@@ -301,6 +301,7 @@ const correos = { pagina: 1, datos: null };                              // una 
 let madrugada = null;      // la prueba de madrugada (migración 030)
 let catalogo = null;       // el catálogo de productos de SUNAT (migración 031)
 let esquemas = null;       // los esquemas XSD y sus avisos (migración 033)
+let padron = null;         // 22 oct: el padrón de SUNAT de la plataforma (solo ver)
 const avisosXsd = { pagina: 1 };
 let casoAbierto = null;    // { corrida, caso } de la casilla elegida
 let relojPantalla = null;  // vuelve a cargar mientras una prueba corre
@@ -392,6 +393,8 @@ async function cargar() {
       .catch(e => ({ error: e.message, detalle: e.detalle }));
     esquemas = await pedir(`/admin/vigilancia/xsd?pagina=${avisosXsd.pagina}`)
       .catch(e => ({ error: e.message, detalle: e.detalle }));
+    padron = await pedir("/admin/vigilancia/padron")
+      .catch(e => ({ error: e.message, detalle: e.detalle }));
     await Promise.all([cargarCodigos(), cargarCorreos()]);
 
     if (!PESTANAS.some(p => p.id === pestana)) pestana = pestanaInicial();
@@ -415,6 +418,7 @@ const PESTANAS = [
   { id: "madrugada", texto: "Prueba de madrugada" },
   { id: "catalogo",  texto: "Catálogo de productos SUNAT" },
   { id: "xsd",       texto: "Esquemas XSD" },
+  { id: "padron",    texto: "Padrón RUC" },
   { id: "codigos",   texto: "Códigos de SUNAT" },
   { id: "correos",   texto: "Correos para alertas" }
 ];
@@ -452,6 +456,13 @@ function insignia(id) {
     const faltan = moldesXsd().filter(m => !m.cargado).length;
     return faltan > 0 ? `<span class="insignia atencion">${faltan}</span>` : `<span class="insignia sano">✓</span>`;
   }
+  if (id === "padron") {
+    const k = padron;
+    if (!k || k.error) return `<span class="insignia atencion">!</span>`;
+    if (k.enCurso) return `<span class="insignia">cargando</span>`;
+    if (k.cargas?.[0]?.estado === "error") return `<span class="insignia problema">!</span>`;
+    return k.enUso ? `<span class="insignia sano">✓</span>` : `<span class="insignia atencion">!</span>`;
+  }
   if (id === "catalogo") {
     const k = catalogo;
     if (!k || k.error) return "";
@@ -474,6 +485,7 @@ function pintar() {
     pestana === "madrugada" ? seccionMadrugada()
     : pestana === "catalogo" ? seccionCatalogo()
     : pestana === "xsd" ? seccionXsd()
+    : pestana === "padron" ? seccionPadron()
     : pestana === "codigos" ? seccionCodigos()
     : seccionCorreos();
 
@@ -531,6 +543,50 @@ const FILTROS_CODIGOS = [
   { id: "observaciones", texto: "Observaciones" },
   { id: "aceptados",     texto: "Aceptados" }
 ];
+
+// 22 oct — PADRÓN RUC: lo baja y lo usa la plataforma; aquí solo se mira.
+function seccionPadron() {
+  const k = padron;
+  const cabecera = `
+      <h2>Padrón RUC de SUNAT (plataforma)</h2>
+      <p class="bajada">La plataforma baja cada madrugada el padrón reducido de SUNAT (unos 18 millones de RUC)
+        para las consultas de RUC sin costo. Se configura y se sube a mano en la plataforma:
+        <b>Plataforma › Consultas SUNAT</b>. Aquí solo se ve si está al día y, si falló, por qué.</p>`;
+
+  if (!k || k.error)
+    return `<section>${cabecera}<p class="mal">${esc(k?.error || "Sin datos.")} ${esc(k?.detalle || "")}</p></section>`;
+
+  const n = v => v == null ? "—" : Number(v).toLocaleString("es-PE");
+  const ultima = k.cargas?.[0];
+  const pildora = k.enCurso ? `<span class="pildora">Cargando…</span>`
+    : ultima?.estado === "error" ? `<span class="pildora problema">La última carga falló</span>`
+    : k.enUso ? `<span class="pildora sano">Al día</span>`
+    : `<span class="pildora atencion">Sin padrón cargado</span>`;
+
+  const filas = (k.cargas || []).map(c => `
+      <tr>
+        <td>${fecha(c.iniciadaEn)}</td>
+        <td>${c.origen === "automatica" ? "Automática" : "Manual"}</td>
+        <td>${c.estado === "ok" ? `<span class="ok">Bien</span>` : c.estado === "error" ? `<span class="falta">Falló</span>` : "En curso"}</td>
+        <td>${n(c.filas)}</td>
+        <td>${esc(c.motivo || "")}</td>
+      </tr>`).join("");
+
+  return `
+    <section>${cabecera}
+      <div class="ficha">
+        <p style="margin:0 0 10px">${pildora}
+          <span class="sub">Modo de consultas: ${k.modo === "sunat" ? "SUNAT (sin costo)" : "Decolecta (con membresía)"}</span></p>
+        <dl>
+          <dt>Padrón en uso</dt><dd>${k.enUso ? `${n(k.enUso.filas)} RUC · cargado ${fecha(k.enUso.cargadoEn)}` : "—"}</dd>
+        </dl>
+      </div>
+      <table class="esq">
+        <thead><tr><th>Cuándo</th><th>Cómo</th><th>Resultado</th><th>RUC</th><th>Motivo</th></tr></thead>
+        <tbody>${filas || `<tr><td colspan="5" class="sub">Todavía no hubo ninguna carga.</td></tr>`}</tbody>
+      </table>
+    </section>`;
+}
 
 function seccionCodigos() {
   return `
