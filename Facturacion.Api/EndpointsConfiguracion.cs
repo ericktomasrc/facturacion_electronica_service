@@ -183,6 +183,28 @@ public static class EndpointsConfiguracion
             Results.Ok(await admin.ListarSeriesAsync(emisor.Exigir().Id, ct)))
             .WithSummary("Las series de la empresa de la clave");
 
+        // 22 OCT: QUITAR UNA SERIE QUE NUNCA SE USÓ (último número 0 y ningún
+        // comprobante). Para el que la agregó por error en el asistente. Una
+        // que ya se usó no se quita nunca: borraría el rastro de su numeración.
+        grupo.MapDelete("/series/{serieId:guid}", async (
+            Guid serieId, ContextoEmisor emisor, RepositorioAdmin admin, CancellationToken ct) =>
+        {
+            var tenant = emisor.Exigir();
+            var s = (await admin.ListarSeriesAsync(tenant.Id, ct)).FirstOrDefault(x => x.Id == serieId);
+            if (s is null)
+                return Results.NotFound(new RespuestaError("Esa serie ya no existe."));
+
+            if (s.UltimoCorrelativo > 0 || s.Comprobantes > 0)
+                return Results.Conflict(new RespuestaError(
+                    $"La {s.Serie} ya se usó y no se puede quitar.",
+                    "Tiene números usados o comprobantes. Quitarla borraría el rastro de su numeración."));
+
+            return await admin.EliminarSerieAsync(tenant.Id, serieId, ct)
+                ? Results.Ok(new { mensaje = $"Serie {s.Serie} quitada." })
+                : Results.Conflict(new RespuestaError($"La {s.Serie} ya tiene comprobantes y no se puede quitar."));
+        })
+        .WithSummary("Quita una serie que nunca se usó (último número 0, sin comprobantes)");
+
         grupo.MapPost("/series", async (
             SerieDesdePlataforma nueva, ContextoEmisor emisor,
             RepositorioAdmin admin, CancellationToken ct) =>
