@@ -453,6 +453,7 @@ app.MapearAnulacionBoletas();
 app.MapearEstadoSunat();
 app.MapearPortal();
 app.MapearPortalAdmin();
+app.MapearEnlacePortal();   // 22 oct: enlace del portal para WhatsApp
 
 app.MapGet("/health", () => Results.Ok(new { estado = "vivo" }))
    .WithName("Salud")

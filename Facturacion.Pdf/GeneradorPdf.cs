@@ -766,7 +766,7 @@ public static class GeneradorPdf
     /// y por los guiones. No sale perfecto siempre, pero sale legible, y una
     /// clave nueva no obliga a tocar este archivo.
     /// </summary>
-    private static string EtiquetaExtra(string clave)
+    internal static string EtiquetaExtra(string clave)   // 22 oct: también el ticket
     {
         if (string.IsNullOrWhiteSpace(clave)) return "";
 
@@ -798,7 +798,7 @@ public static class GeneradorPdf
             : char.ToUpperInvariant(resultado[0]) + resultado.Substring(1);
     }
 
-    private static string NombreDocumento(string tipo) => tipo switch
+    internal static string NombreDocumento(string tipo) => tipo switch
     {
         TipoComprobante.Factura => "FACTURA ELECTRÓNICA",
         TipoComprobante.Boleta => "BOLETA DE VENTA ELECTRÓNICA",
@@ -807,7 +807,7 @@ public static class GeneradorPdf
         _ => "COMPROBANTE ELECTRÓNICO"
     };
 
-    private static string NombreTipoDoc(string tipo) => tipo switch
+    internal static string NombreTipoDoc(string tipo) => tipo switch
     {
         TipoDocIdentidad.Ruc => "RUC",
         TipoDocIdentidad.Dni => "DNI",
@@ -824,7 +824,7 @@ public static class GeneradorPdf
         _ => moneda
     };
 
-    private static string SimboloMoneda(string moneda) => moneda switch
+    internal static string SimboloMoneda(string moneda) => moneda switch
     {
         "PEN" => "S/",
         "USD" => "US$",
@@ -832,7 +832,7 @@ public static class GeneradorPdf
         _ => moneda
     };
 
-    private static string DescripcionMotivo(NotaCredito n) =>
+    internal static string DescripcionMotivo(NotaCredito n) =>
         string.IsNullOrWhiteSpace(n.DescripcionMotivo)
             ? MotivoNotaCredito.Descripcion(n.CodigoMotivo)
             : n.DescripcionMotivo;

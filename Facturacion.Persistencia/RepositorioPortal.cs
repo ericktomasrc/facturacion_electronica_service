@@ -65,6 +65,13 @@ public sealed class RepositorioPortal
     private const string EstadosVisibles =
         "('ACEPTADO', 'ACEPTADO_CON_OBSERVACIONES', 'ANULADO')";
 
+    // 22 OCT: CON UN ENLACE (el del correo o el de WhatsApp) se abre también
+    // el que sigue EN CAMINO: una boleta viaja en el resumen del día
+    // siguiente y el cliente la recibe por WhatsApp al momento. La BÚSQUEDA
+    // con datos sigue viendo solo los aceptados. Un RECHAZADO, nunca.
+    private const string EstadosConEnlace =
+        "('FIRMADO', 'ENCOLADO', 'ENVIADO', 'ACEPTADO', 'ACEPTADO_CON_OBSERVACIONES', 'ANULADO')";
+
     // Facturas, boletas y notas. Las guías, retenciones y percepciones no
     // tienen "comprador" con el mismo significado; se añaden cuando toque.
     private const string TiposVisibles = "('01', '03', '07', '08')";
@@ -217,13 +224,23 @@ public sealed class RepositorioPortal
                   FROM comprobantes c
                  WHERE c.id = @comprobanteId
                    AND c.tipo_comprobante IN {TiposVisibles}
-                   AND c.estado IN {EstadosVisibles}
+                   AND c.estado IN {EstadosConEnlace}
                 """,
                 new { comprobanteId },
                 sesion.Transaccion, cancellationToken: ct));
 
         await sesion.ConfirmarAsync(ct);
         return fila;
+    }
+
+    /// <summary>22 oct: la dirección de la empresa en el portal, o null si no tiene o está desactivada.</summary>
+    public async Task<string?> IdentificadorAsync(Guid tenantId, CancellationToken ct = default)
+    {
+        await using var conexion = await _sesiones.AbrirCatalogoAsync(ct);
+
+        return await conexion.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(
+            "SELECT identificador FROM tenants WHERE id = @tenantId AND activo AND identificador IS NOT NULL",
+            new { tenantId }, cancellationToken: ct));
     }
 
     /// <summary>Crea un acceso. Se guarda el hash, nunca el identificador.</summary>

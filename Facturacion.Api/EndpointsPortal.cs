@@ -306,11 +306,16 @@ public static partial class EndpointsPortal
         importeTotal = c.ImporteTotal,
         receptor = c.ReceptorNombre,
         anulado = c.Estado == "ANULADO",
+        // 22 oct: con el enlace de WhatsApp se abre también el que va en camino.
+        pendiente = c.Estado is "FIRMADO" or "ENCOLADO" or "ENVIADO",
         estado = c.Estado switch
         {
             "ACEPTADO" => "Aceptado por SUNAT",
             "ACEPTADO_CON_OBSERVACIONES" => "Aceptado por SUNAT con observaciones",
             "ANULADO" => "Anulado: dado de baja ante SUNAT",
+            "FIRMADO" or "ENCOLADO" or "ENVIADO" => EsBoleta(c)
+                ? "En camino a SUNAT (las boletas se informan al día siguiente)"
+                : "En camino a SUNAT",
             _ => c.Estado
         },
         archivos = new

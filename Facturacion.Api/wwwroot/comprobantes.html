@@ -1211,7 +1211,7 @@
                 <table style="margin-top:12px">
                   <tr><th>Enlace</th><th>Creado</th><th>Vale hasta</th><th>Usos</th><th>Estado del enlace</th></tr>
                   ${datos.accesos.map(a => `<tr>
-                    <td>${a.origen === "correo" ? "del correo" : "búsqueda (30 min)"}</td>
+                    <td>${a.origen === "correo" ? "del correo" : a.origen === "whatsapp" ? "de WhatsApp" : "búsqueda (30 min)"}</td>
                     <td class="tenue" style="white-space:nowrap">${fechaHora(a.creadoEn)}</td>
                     <td class="tenue" style="white-space:nowrap">${fechaHora(a.expiraEn)}</td>
                     <td>${a.usos}</td>

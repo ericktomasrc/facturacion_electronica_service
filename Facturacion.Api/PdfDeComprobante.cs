@@ -77,9 +77,20 @@ public static class PdfDeComprobante
     /// tres documentos de abajo no cumplen ninguna de las tres cosas, y por
     /// eso tienen el suyo.
     /// </summary>
+    /// <summary>22 oct: «ticket80» → 80, «ticket58» → 58; cualquier otra cosa (o nada) → A4.</summary>
+    public static int? AnchoTicket(string? formato) => formato?.Trim().ToLowerInvariant() switch
+    {
+        "ticket80" or "80" => 80,
+        "ticket58" or "58" => 58,
+        _ => null
+    };
+
     public static byte[] Generar(
-        ComprobanteBase comprobante, string? digest, OpcionesImpresion opciones) =>
-        comprobante switch
+        ComprobanteBase comprobante, string? digest, OpcionesImpresion opciones, string? formato = null) =>
+        // 22 OCT: EN TICKET, las facturas, boletas y notas (las demás siempre en A4).
+        AnchoTicket(formato) is { } ancho && comprobante is Factura or Boleta or NotaCredito or NotaDebito
+            ? GeneradorTicket.Generar(comprobante, digest, opciones, ancho)
+            : comprobante switch
         {
             LiquidacionCompra lc =>
                 GeneradorPdfEspeciales.Generar(lc, digest, opciones),
@@ -189,7 +200,7 @@ public static class PdfDeComprobante
     /// cuenta.
     /// </summary>
     public static async Task<IResult> ResponderAsync(
-        DatosParaPdf datos, IAlmacenArchivos archivos, CancellationToken ct)
+        DatosParaPdf datos, IAlmacenArchivos archivos, CancellationToken ct, string? formato = null)
     {
         // UN PDF DE UN BORRADOR INDUCE A ERROR y por eso no se genera.
         //
@@ -218,9 +229,10 @@ public static class PdfDeComprobante
                 title: "Comprobante ilegible");
         }
 
-        var pdf = await GenerarBytesAsync(comprobante, datos, archivos, ct);
+        var pdf = await GenerarBytesAsync(comprobante, datos, archivos, ct, formato);
 
-        return Results.File(pdf, "application/pdf", $"{datos.Numero}.pdf");
+        var sufijo = AnchoTicket(formato) is { } mm ? $"-ticket{mm}" : "";
+        return Results.File(pdf, "application/pdf", $"{datos.Numero}{sufijo}.pdf");
     }
 
     /// <summary>
@@ -232,7 +244,7 @@ public static class PdfDeComprobante
     /// </summary>
     public static async Task<byte[]> GenerarBytesAsync(
         ComprobanteBase comprobante, DatosParaPdf datos,
-        IAlmacenArchivos archivos, CancellationToken ct)
+        IAlmacenArchivos archivos, CancellationToken ct, string? formato = null)
     {
         // EL RESUMEN DE LA FIRMA SE LEE DEL XML, no se recalcula.
         //
@@ -274,7 +286,7 @@ public static class PdfDeComprobante
 
         try
         {
-            pdf = Generar(comprobante, digest, opciones);
+            pdf = Generar(comprobante, digest, opciones, formato);
         }
         catch (Exception) when (logo is not null)
         {
@@ -284,7 +296,7 @@ public static class PdfDeComprobante
             // que esto no debería pasar. Si pasa, el PDF sale sin logo: es el
             // mismo criterio que con `extra`. Un adorno no vale una factura
             // que no se puede entregar.
-            pdf = Generar(comprobante, digest, opciones with { Logo = null });
+            pdf = Generar(comprobante, digest, opciones with { Logo = null }, formato);
         }
 
         return pdf;

@@ -117,6 +117,7 @@ public static class EndpointsDescarga
         ContextoEmisor emisor,
         RepositorioComprobantes repositorio,
         IAlmacenArchivos archivos,
+        string? formato,   // 22 oct: ?formato=ticket80 | ticket58 (por defecto, A4)
         CancellationToken ct)
     {
         var tenant = emisor.Exigir();
@@ -132,6 +133,6 @@ public static class EndpointsDescarga
         //
         // Lo único que cambia entre las dos rutas es cómo se averigua de quién
         // es el comprobante, y eso es justo lo de arriba.
-        return await PdfDeComprobante.ResponderAsync(datos, archivos, ct);
+        return await PdfDeComprobante.ResponderAsync(datos, archivos, ct, formato);
     }
 }

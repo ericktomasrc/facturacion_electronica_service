@@ -96,6 +96,7 @@
             padding:3px 10px; border-radius:999px; margin-bottom:16px; }
   .estado.ok { background:var(--ok-fondo); color:var(--ok); }
   .estado.anulado { background:var(--mal-fondo); color:var(--mal); }
+  .estado.pendiente { background:var(--aviso-fondo); color:var(--aviso); }
 
   dl { display:grid; grid-template-columns:auto 1fr; gap:6px 16px; margin:0 0 20px;
        font-size:15px; }
@@ -368,7 +369,7 @@ function pintar(c) {
 
   const estado = elem("r-estado");
   estado.textContent = c.estado;
-  estado.className = "estado " + (c.anulado ? "anulado" : "ok");
+  estado.className = "estado " + (c.anulado ? "anulado" : c.pendiente ? "pendiente" : "ok");
 
   elem("r-fecha").textContent = dia(c.fechaEmision);
   elem("r-importe").textContent = dinero(c.importeTotal, c.moneda);
