@@ -148,4 +148,7 @@ public record DatosParaPdf(
 
     // Dónde está el logo de la empresa en el almacén (tenants.logo_ruta,
     // migración 020). Null si no tiene: el PDF sale sin logo, como antes.
-    string? LogoRuta);
+    string? LogoRuta,
+
+    // 039: el formato A4 de la empresa (tenants.formato_pdf): moderno o clasico.
+    string? FormatoPdf = null);

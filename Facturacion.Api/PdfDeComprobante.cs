@@ -101,6 +101,10 @@ public static class PdfDeComprobante
             ComprobantePercepcion p =>
                 GeneradorPdfEspeciales.Generar(p, digest, opciones),
 
+            // 039: el formato clásico (estilo SUNAT), si la empresa lo eligió.
+            Factura or Boleta or NotaCredito or NotaDebito when opciones.Estilo == FormatoPdf.Clasico =>
+                GeneradorPdfClasico.Generar(comprobante, digest, opciones),
+
             _ => GeneradorPdf.Generar(comprobante, digest, opciones)
         };
 
@@ -280,7 +284,8 @@ public static class PdfDeComprobante
             EstadoSunat: TextoEstado(datos.Estado),
             MensajeSunat: datos.MensajeSunat,
             Logo: logo,
-            Extra: LeerExtra(datos.ExtraJson));
+            Extra: LeerExtra(datos.ExtraJson),
+            Estilo: datos.FormatoPdf);   // 039
 
         byte[] pdf;
 

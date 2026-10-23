@@ -493,6 +493,9 @@ public static class EndpointsConfiguracion
         .WithSummary("Sube el logo de la empresa de la clave")
         .WithDescription("PNG o JPG. El anterior no se borra del almacén: solo deja de usarse.");
 
+        // 039: el formato del PDF (moderno / clásico) y su ejemplo.
+        FormatoPdf.Mapear(grupo);
+
         // ------------------------------------------------------------------ SOL
 
         grupo.MapPut("/sol", async (

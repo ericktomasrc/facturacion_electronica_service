@@ -430,6 +430,23 @@ public sealed class RepositorioAdmin
     /// Pesa unos kilobytes, y así un cambio por error se deshace volviendo a
     /// apuntar la ruta vieja.
     /// </summary>
+    /// <summary>039: el formato del PDF de la empresa (moderno | clasico); null si no existe.</summary>
+    public async Task<string?> ObtenerFormatoPdfAsync(Guid id, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+        return await conexion.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(
+            "SELECT formato_pdf FROM tenants WHERE id = @id", new { id }, cancellationToken: ct));
+    }
+
+    /// <summary>039: cambia el formato del PDF. Vale también para los ya emitidos (el PDF se genera al pedirlo).</summary>
+    public async Task<bool> GuardarFormatoPdfAsync(Guid id, string formato, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+        return await conexion.ExecuteAsync(new CommandDefinition(
+            "UPDATE tenants SET formato_pdf = @formato WHERE id = @id",
+            new { id, formato }, cancellationToken: ct)) > 0;
+    }
+
     public async Task<bool> GuardarLogoAsync(Guid id, string ruta, CancellationToken ct = default)
     {
         await using var conexion = await AbrirAsync(ct);

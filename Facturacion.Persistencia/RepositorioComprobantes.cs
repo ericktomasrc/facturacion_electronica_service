@@ -465,7 +465,10 @@ public sealed class RepositorioComprobantes
                        -- leerla. El filtro por tenant ya lo puso la fila
                        -- de comprobantes, que sí lo tiene.
                        (SELECT t.logo_ruta FROM tenants t
-                         WHERE t.id = comprobantes.tenant_id) AS "LogoRuta"
+                         WHERE t.id = comprobantes.tenant_id) AS "LogoRuta",
+                       -- 039: el formato del PDF de la empresa.
+                       (SELECT t.formato_pdf FROM tenants t
+                         WHERE t.id = comprobantes.tenant_id) AS "FormatoPdf"
                   FROM comprobantes
                  WHERE id = @comprobanteId
                 """,

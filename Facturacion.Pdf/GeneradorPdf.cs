@@ -15,7 +15,11 @@ public record OpcionesImpresion(
     // Campos propios de la empresa que se imprimen y no viajan a SUNAT.
     // La clave es como la mandó quien integra ("ordenCompra") y el
     // generador se encarga de convertirla en una etiqueta legible.
-    IReadOnlyDictionary<string, string>? Extra = null)
+    IReadOnlyDictionary<string, string>? Extra = null,
+
+    // 039: el formato A4 de la empresa: «moderno» (este generador) o «clasico»
+    // (GeneradorPdfClasico, estilo del PDF del portal de SUNAT).
+    string? Estilo = null)
 {
     public static readonly OpcionesImpresion PorDefecto = new();
 }
