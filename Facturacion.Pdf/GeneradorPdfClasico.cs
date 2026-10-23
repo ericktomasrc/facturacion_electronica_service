@@ -33,6 +33,21 @@ public static class GeneradorPdfClasico
         GeneradorPdf.ConfigurarLicencia();
         opciones ??= OpcionesImpresion.PorDefecto;
 
+        // UN COMPROBANTE NO SE QUEDA SIN PDF POR EL DISEÑO: si algo de este
+        // formato no cabe (un logo muy ancho, un texto sin espacios), sale en
+        // el formato moderno, que ya está probado.
+        try
+        {
+            return Dibujar(c, digestFirma, opciones);
+        }
+        catch (QuestPDF.Drawing.Exceptions.DocumentLayoutException)
+        {
+            return GeneradorPdf.Generar(c, digestFirma, opciones);
+        }
+    }
+
+    private static byte[] Dibujar(ComprobanteBase c, string? digestFirma, OpcionesImpresion opciones)
+    {
         var totales = CalculadoraTotales.Calcular(c);
         var lineas = CalculadoraTotales.CalcularLineas(c);
         var qr = CodigoQr.GenerarPng(CodigoQr.Contenido(c, totales, digestFirma));
@@ -70,8 +85,10 @@ public static class GeneradorPdfClasico
             fila.RelativeItem().Column(col =>
             {
                 col.Spacing(1);
+                // FitArea y no FitHeight: un logo ancho a 42 pt de alto puede
+                // pedir más ancho que el que hay (eso rompía el PDF).
                 if (o.Logo is not null)
-                    col.Item().Height(42).Image(o.Logo).FitHeight();
+                    col.Item().Height(42).AlignLeft().Image(o.Logo).FitArea();
 
                 var comercial = string.IsNullOrWhiteSpace(c.Emisor.NombreComercial) ? c.Emisor.RazonSocial : c.Emisor.NombreComercial;
                 col.Item().Text(comercial.ToUpperInvariant()).FontSize(11).Bold();
@@ -238,10 +255,13 @@ public static class GeneradorPdfClasico
             {
                 col.Spacing(8);
 
+                // La etiqueta en un RelativeItem (puede partir en dos líneas): con
+                // AutoItem no cabía junto a la caja y el PDF no se generaba.
                 col.Item().PaddingTop(18).Row(r =>
                 {
-                    r.AutoItem().AlignMiddle().Text("Valor de Venta de Operaciones Gratuitas : ").FontSize(9);
-                    r.ConstantItem(100).Border(1).BorderColor(Colors.Black).PaddingHorizontal(4).PaddingVertical(2)
+                    r.RelativeItem().AlignMiddle().AlignRight().PaddingRight(4)
+                        .Text("Valor de Venta de Operaciones Gratuitas :").FontSize(9);
+                    r.ConstantItem(90).AlignMiddle().Border(1).BorderColor(Colors.Black).PaddingHorizontal(4).PaddingVertical(2)
                         .AlignRight().Text($"{s} {F2(t.TotalGratuito)}").FontSize(9);
                 });
 
