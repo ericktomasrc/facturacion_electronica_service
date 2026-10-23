@@ -242,6 +242,13 @@ public class Emisor
     public string Departamento { get; set; } = "";
     public string CodigoEstablecimiento { get; set; } = "0000";
     public string CodigoPais { get; set; } = "PE";
+
+    /// <summary>
+    /// 23 oct: la dirección del local anexo desde el que se emite (sucursal).
+    /// Solo para el PDF («Local: …»); no va al XML, que lleva el domicilio
+    /// fiscal y el código de establecimiento. Vacío = la 0000.
+    /// </summary>
+    public string DireccionLocal { get; set; } = "";
 }
 
 public class Receptor

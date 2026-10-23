@@ -65,6 +65,9 @@ public static class GeneradorTicket
                     col.Item().AlignCenter().Text(c.Emisor.Direccion).FontSize(letra - 0.5f);
                     col.Item().AlignCenter().Text($"{c.Emisor.Distrito} - {c.Emisor.Provincia} - {c.Emisor.Departamento}")
                         .FontSize(letra - 0.5f);
+                    // 23 oct: emitido desde un local anexo (sucursal).
+                    if (!string.IsNullOrWhiteSpace(c.Emisor.DireccionLocal))
+                        col.Item().AlignCenter().Text($"Local: {c.Emisor.DireccionLocal}").FontSize(letra - 0.5f);
 
                     Raya(col);
 

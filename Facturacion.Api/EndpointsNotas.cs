@@ -48,6 +48,9 @@ public class PeticionNota
     [Required]
     public ReceptorDto Receptor { get; set; } = new();
 
+    /// <summary>23 oct: desde qué local se emite (sucursal). Sin él, 0000.</summary>
+    public EstablecimientoDto? Establecimiento { get; set; }
+
     [Required]
     [MinLength(1, ErrorMessage = "La nota necesita al menos una línea.")]
     public List<LineaDto> Lineas { get; set; } = [];
@@ -210,6 +213,9 @@ public static class EndpointsNotas
 
         // --- Construcción ---
 
+        if (Establecimientos.Problema(peticion.Establecimiento) is { } malLocal)
+            return Results.BadRequest(new RespuestaError("Datos inválidos.", malLocal));
+
         ComprobanteBase nota = esCredito
             ? ConstruirCredito(peticion, tenant)
             : ConstruirDebito(peticion, tenant);
@@ -283,7 +289,7 @@ public static class EndpointsNotas
             Numero = p.Afectado.NumeroCompleto,
             TipoDocumento = p.Afectado.TipoDocumento
         },
-        Emisor = MapearEmisor(t),
+        Emisor = Establecimientos.Aplicar(MapearEmisor(t), p.Establecimiento),   // 23 oct
         Receptor = MapearReceptor(p.Receptor),
         Lineas = MapearLineas(p.Lineas)
     };
@@ -301,7 +307,7 @@ public static class EndpointsNotas
             Numero = p.Afectado.NumeroCompleto,
             TipoDocumento = p.Afectado.TipoDocumento
         },
-        Emisor = MapearEmisor(t),
+        Emisor = Establecimientos.Aplicar(MapearEmisor(t), p.Establecimiento),   // 23 oct
         Receptor = MapearReceptor(p.Receptor),
         Lineas = MapearLineas(p.Lineas)
     };

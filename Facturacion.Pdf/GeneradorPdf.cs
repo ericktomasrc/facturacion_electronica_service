@@ -151,6 +151,14 @@ public static class GeneradorPdf
                 columna.Item().Text(
                     $"{c.Emisor.Distrito} - {c.Emisor.Provincia} - {c.Emisor.Departamento}")
                     .FontSize(8);
+
+                // 23 oct: emitido desde un local anexo (sucursal).
+                if (!string.IsNullOrWhiteSpace(c.Emisor.DireccionLocal))
+                    columna.Item().Text(t =>
+                    {
+                        t.Span("Local: ").FontSize(8).SemiBold();
+                        t.Span(c.Emisor.DireccionLocal).FontSize(8);
+                    });
             });
 
             fila.ConstantItem(20);

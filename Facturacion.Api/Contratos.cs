@@ -113,6 +113,12 @@ public class PeticionComprobante
     [Required]
     public ReceptorDto Receptor { get; set; } = new();
 
+    /// <summary>
+    /// 23 oct: desde qué local del MISMO RUC se emite (sucursal): código de
+    /// establecimiento (va al XML) y su dirección (va al PDF). Sin él, 0000.
+    /// </summary>
+    public EstablecimientoDto? Establecimiento { get; set; }
+
     [Required]
     [MinLength(1, ErrorMessage = "El comprobante necesita al menos una línea.")]
     public List<LineaDto> Lineas { get; set; } = [];

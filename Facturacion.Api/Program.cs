@@ -925,6 +925,9 @@ static ComprobanteBase ConstruirComprobante(
         Departamento = tenant.Departamento
     };
 
+    // 23 OCT: DESDE QUÉ LOCAL (sucursal). Lanza ArgumentException → 400.
+    Establecimientos.Aplicar(emisor, peticion.Establecimiento);
+
     var receptor = new Receptor
     {
         TipoDocumento = peticion.Receptor.TipoDocumento,
