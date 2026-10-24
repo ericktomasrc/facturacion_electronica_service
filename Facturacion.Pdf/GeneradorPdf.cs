@@ -593,7 +593,9 @@ public static class GeneradorPdf
         var factura = c as Factura;
 
         var hayCargos = c.CargosGlobales.Count > 0;
-        var hayCuotas = factura is not null && factura.Cuotas.Count > 0;
+        // 24 oct: la nota de crédito con motivo 13 también lleva cuotas.
+        var cuotas = factura?.Cuotas ?? (c as NotaCredito)?.Cuotas ?? [];
+        var hayCuotas = cuotas.Count > 0;
         var hayDetraccion = factura?.Detraccion is not null;
 
         // UN CONTENEDOR DE QuestPDF NECESITA EXACTAMENTE UN HIJO, siempre.
@@ -647,16 +649,17 @@ public static class GeneradorPdf
 
             // --- Las cuotas ---------------------------------------------------
 
-            if (factura is not null && hayCuotas)
+            if (hayCuotas)
             {
                 columna.Item().Column(caja =>
                 {
                     caja.Item().Text(
-                        $"Pago en {factura.Cuotas.Count} " +
-                        (factura.Cuotas.Count == 1 ? "cuota" : "cuotas"))
+                        (factura is null ? "Cuotas nuevas: " : "") +
+                        $"Pago en {cuotas.Count} " +
+                        (cuotas.Count == 1 ? "cuota" : "cuotas"))
                         .FontSize(8).SemiBold();
 
-                    foreach (var cuota in factura.Cuotas.OrderBy(x => x.Numero))
+                    foreach (var cuota in cuotas.OrderBy(x => x.Numero))
                     {
                         caja.Item().Row(fila =>
                         {

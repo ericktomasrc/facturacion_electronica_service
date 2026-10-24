@@ -560,6 +560,25 @@ public sealed class RepositorioAdmin
         return filas > 0;
     }
 
+    /// <summary>
+    /// 24 oct: cómo están las credenciales de guías de una empresa (para la
+    /// plataforma). El secreto nunca sale: solo si existe.
+    /// </summary>
+    public async Task<EstadoGre?> LeerGreAsync(Guid tenantId, CancellationToken ct = default)
+    {
+        await using var conexion = await AbrirAsync(ct);
+        return await conexion.QuerySingleOrDefaultAsync<EstadoGre>(new CommandDefinition(
+            """
+            SELECT gre_habilitado AS "Habilitado",
+                   gre_client_id  AS "ClientId",
+                   (gre_client_secret_cifrado IS NOT NULL AND length(gre_client_secret_cifrado) > 0) AS "TieneSecreto",
+                   ambiente       AS "Ambiente"
+              FROM tenants
+             WHERE id = @tenantId
+            """,
+            new { tenantId }, cancellationToken: ct));
+    }
+
     /// <summary>Activa o desactiva la emisión de guías.</summary>
     public async Task<bool> CambiarGreHabilitadoAsync(
         Guid tenantId, bool habilitado, CancellationToken ct = default)
@@ -1010,4 +1029,14 @@ public sealed class RepositorioAdmin
 
         return filas > 0;
     }
+}
+
+
+/// <summary>24 oct: las credenciales de guías de una empresa, sin el secreto.</summary>
+public sealed class EstadoGre
+{
+    public bool Habilitado { get; set; }
+    public string? ClientId { get; set; }
+    public bool TieneSecreto { get; set; }
+    public string Ambiente { get; set; } = "beta";
 }

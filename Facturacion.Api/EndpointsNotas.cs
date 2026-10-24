@@ -56,6 +56,12 @@ public class PeticionNota
     public List<LineaDto> Lineas { get; set; } = [];
 
     public Dictionary<string, object>? Extra { get; set; }
+
+    /// <summary>
+    /// 24 oct: solo para la nota de crédito con motivo 13: las cuotas nuevas
+    /// (monto y vencimiento). El monto neto pendiente es su suma.
+    /// </summary>
+    public List<CuotaDto>? Cuotas { get; set; }
 }
 
 /// <summary>El comprobante al que la nota afecta.</summary>
@@ -141,6 +147,43 @@ public static class EndpointsNotas
             return Results.BadRequest(new RespuestaError(
                 "La nota necesita al menos una línea."));
 
+        // 24 oct: el motivo tiene que existir en su catálogo (09 o 10).
+        var motivos = esCredito ? MotivoNotaCredito.Todos : MotivoNotaDebito.Todos;
+        if (!motivos.Contains(peticion.CodigoMotivo))
+            return Results.BadRequest(new RespuestaError(
+                "El motivo de la nota no existe.",
+                $"«{peticion.CodigoMotivo}» no está en el catálogo {(esCredito ? "09" : "10")} de SUNAT. " +
+                $"Valen: {string.Join(", ", motivos)}."));
+
+        // 24 oct: en boletas no valen 04 (descuento global), 05 (descuento
+        // por ítem) ni 08 (bonificación): SUNAT las rechaza.
+        if (esCredito && peticion.Afectado.TipoDocumento == TipoComprobante.Boleta &&
+            MotivoNotaCredito.SoloFacturas.Contains(peticion.CodigoMotivo))
+            return Results.BadRequest(new RespuestaError(
+                "Ese motivo no vale para boletas.",
+                $"El motivo {peticion.CodigoMotivo} ({MotivoNotaCredito.Descripcion(peticion.CodigoMotivo)}) es solo para facturas."));
+
+        // 24 oct: MOTIVO 13 — monto cero y las cuotas nuevas.
+        var esAjusteDeCuotas = esCredito && peticion.CodigoMotivo == MotivoNotaCredito.AjusteMontosYFechasDePago;
+        if (esAjusteDeCuotas)
+        {
+            if (peticion.Afectado.TipoDocumento != TipoComprobante.Factura)
+                return Results.BadRequest(new RespuestaError(
+                    "El motivo 13 es solo para facturas.", "Corrige las cuotas de una factura al crédito."));
+            if (peticion.Cuotas is not { Count: > 0 })
+                return Results.BadRequest(new RespuestaError(
+                    "Faltan las cuotas.", "El motivo 13 lleva las cuotas nuevas: monto y fecha de vencimiento."));
+            var hoy = (peticion.FechaEmision ?? RelojPeru.Ahora).Date;
+            if (peticion.Cuotas.Any(c => c.FechaVencimiento.Date <= hoy))
+                return Results.BadRequest(new RespuestaError(
+                    "Una cuota vence hoy o antes.", "Cada cuota tiene que vencer después de la fecha de la nota (error 3267)."));
+        }
+        else if (peticion.Cuotas is { Count: > 0 })
+        {
+            return Results.BadRequest(new RespuestaError(
+                "Las cuotas solo van con el motivo 13.", "Las demás notas no llevan forma de pago."));
+        }
+
         // El código de producto SUNAT, si viene: con forma válida (ERR-3496
         // desde 2027). Se ve aquí, antes de gastar un correlativo.
         var codigosSunatMalos = CodigoProductoSunat.Problemas(
@@ -219,6 +262,27 @@ public static class EndpointsNotas
         ComprobanteBase nota = esCredito
             ? ConstruirCredito(peticion, tenant)
             : ConstruirDebito(peticion, tenant);
+
+        if (esAjusteDeCuotas)
+        {
+            var nc = (NotaCredito)nota;
+            nc.Cuotas = peticion.Cuotas!.OrderBy(c => c.FechaVencimiento).Select((c, i) => new CuotaCredito
+            {
+                Numero = i + 1,
+                Monto = CalculadoraTotales.Redondear(c.Monto),
+                FechaVencimiento = c.FechaVencimiento.Date
+            }).ToList();
+
+            if (CalculadoraTotales.Calcular(nota).ImporteTotal != 0)
+                return Results.BadRequest(new RespuestaError(
+                    "La nota con motivo 13 va en cero.",
+                    "Solo corrige el monto pendiente y las cuotas: sus líneas no llevan importe."));
+
+            if (nc.MontoPendiente > afectado.ImporteTotal)
+                return Results.BadRequest(new RespuestaError(
+                    "El monto pendiente supera a la factura.",
+                    $"Las cuotas suman {nc.MontoPendiente:0.00} y {afectado.NumeroCompleto} fue por {afectado.ImporteTotal:0.00} (error 3265)."));
+        }
 
         // --- La nota de crédito no puede superar al documento ---
         //

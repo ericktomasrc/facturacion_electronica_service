@@ -272,12 +272,16 @@ public static class GeneradorPdfClasico
                 if (Ivap.Aplica(c))
                     col.Item().Text(Ivap.TextoLeyenda).FontSize(7.5f);
 
-                if (c is Factura f && ReglasCredito.EsCredito(f.FormaPago) && f.Cuotas.Count > 0)
+                // 24 oct: también la nota de crédito con motivo 13 (cuotas nuevas).
+                var cuotas = c is Factura f && ReglasCredito.EsCredito(f.FormaPago) ? f.Cuotas
+                    : c is NotaCredito ncq ? ncq.Cuotas : [];
+                if (cuotas.Count > 0)
                 {
                     col.Item().Column(cc =>
                     {
-                        cc.Item().Text($"Pago al crédito en {f.Cuotas.Count} cuota{(f.Cuotas.Count == 1 ? "" : "s")}").SemiBold();
-                        foreach (var q in f.Cuotas.OrderBy(x => x.Numero))
+                        cc.Item().Text((c is NotaCredito ? "Cuotas nuevas: " : "Pago al crédito en ") +
+                                       $"{cuotas.Count} cuota{(cuotas.Count == 1 ? "" : "s")}").SemiBold();
+                        foreach (var q in cuotas.OrderBy(x => x.Numero))
                             cc.Item().Text($"Cuota {q.Numero}: {s} {F2(q.Monto)} — vence el {q.FechaVencimiento.ToString("dd/MM/yyyy", Inv)}")
                                 .FontSize(8);
                     });

@@ -540,6 +540,49 @@ public static class EndpointsConfiguracion
 
 
         // =====================================================================
+        // 24 oct — LAS CREDENCIALES DE GUÍAS, DESDE LA PLATAFORMA
+        //
+        // Las guías van por la API REST de SUNAT (OAuth2) y piden un ID y una
+        // CLAVE que el contribuyente genera en SOL › Credenciales de API SUNAT
+        // (aplicación «GRE Emisión de comprobantes», alcance Desktop). Son
+        // DISTINTAS de la clave SOL, que las guías también usan. Guardarlas
+        // habilita las guías. El secreto se cifra y nunca vuelve a salir.
+        //
+        // En beta no hacen falta: las guías van al simulador.
+        // =====================================================================
+        grupo.MapGet("/gre", async (ContextoEmisor emisor, RepositorioAdmin admin, CancellationToken ct) =>
+        {
+            var e = await admin.LeerGreAsync(emisor.Exigir().Id, ct);
+            return e is null
+                ? Results.NotFound(new RespuestaError("No se encontró la empresa."))
+                : Results.Ok(new { habilitado = e.Habilitado, clientId = e.ClientId, tieneSecreto = e.TieneSecreto, ambiente = e.Ambiente });
+        })
+        .WithSummary("Cómo están las credenciales de guías (sin el secreto)");
+
+        grupo.MapPut("/gre", async (
+            GreDesdePlataforma gre, ContextoEmisor emisor,
+            RepositorioAdmin admin, IProtectorDeSecretos protector, CancellationToken ct) =>
+        {
+            var tenant = emisor.Exigir();
+            var id = gre.ClientId?.Trim() ?? "";
+            var secreto = gre.ClientSecret?.Trim() ?? "";
+
+            if (id.Length is < 8 or > 100 || id.Any(char.IsWhiteSpace))
+                return Results.BadRequest(new RespuestaError(
+                    "El ID no es válido.", "Cópialo tal cual de SOL › Credenciales de API SUNAT (el «ID»)."));
+            if (secreto.Length is < 8 or > 200)
+                return Results.BadRequest(new RespuestaError(
+                    "Falta la clave.", "La «Clave» que SOL te mostró al registrar la aplicación (solo se ve una vez)."));
+
+            var guardadas = await admin.GuardarCredencialesGreAsync(tenant.Id, id, secreto, protector, ct);
+            return guardadas
+                ? Results.Ok(new { mensaje = "Credenciales de guías guardadas y cifradas. Las guías quedan habilitadas." })
+                : Results.NotFound(new RespuestaError("No se encontró la empresa."));
+        })
+        .WithSummary("Guarda las credenciales de API para guías de remisión");
+
+
+        // =====================================================================
         // PAUSA DE EMISIÓN (fase 4c, migración 028)
         //
         // La plataforma la pone cuando un contador quita la empresa de su
@@ -669,8 +712,10 @@ public static class EndpointsConfiguracion
     /// </summary>
     internal static string? ProblemaSerie(string tipo, string serie)
     {
-        if (tipo is not ("01" or "03" or "07" or "08"))
-            return "El tipo va 01 (factura), 03 (boleta), 07 (nota de crédito) o 08 (nota de débito).";
+        // 24 oct: también las guías: 09 remitente (T…) y 31 transportista (V…).
+        if (tipo is not ("01" or "03" or "07" or "08" or "09" or "31"))
+            return "El tipo va 01 (factura), 03 (boleta), 07 (nota de crédito), 08 (nota de débito), " +
+                   "09 (guía del remitente) o 31 (guía del transportista).";
 
         if (!FormaSerie().IsMatch(serie))
             return "Cuatro caracteres: una letra y tres letras o números. Ej.: F001, B001, FC01.";
@@ -681,6 +726,10 @@ public static class EndpointsConfiguracion
             ("03", not 'B') => "Las boletas usan series que empiezan con B. Ej.: B001.",
             ("07" or "08", not ('F' or 'B')) =>
                 "Las notas empiezan con F (si corrigen facturas) o con B (si corrigen boletas). Ej.: FC01.",
+            ("09", _) when !System.Text.RegularExpressions.Regex.IsMatch(serie, "^T[0-9]{3}$") =>
+                "La guía del remitente usa series T y tres números. Ej.: T001.",
+            ("31", _) when !System.Text.RegularExpressions.Regex.IsMatch(serie, "^V[0-9]{3}$") =>
+                "La guía del transportista usa series V y tres números. Ej.: V001.",
             _ => null
         };
     }
@@ -727,6 +776,9 @@ public record MarcaDesdePlataforma(
     string? Identificador, string? ColorMarca, string? CorreoRespuesta, bool? CopiaAlEmisor);
 
 public record SolDesdePlataforma(string? Usuario, string? Clave);
+
+/// <summary>24 oct: las credenciales de API para guías (SOL › Credenciales de API SUNAT).</summary>
+public record GreDesdePlataforma(string? ClientId, string? ClientSecret);
 
 /// <summary>Fase 4c: pausar o reactivar la emisión de esta clave.</summary>
 public record PausaDesdePlataforma(bool Pausar, string? Motivo);

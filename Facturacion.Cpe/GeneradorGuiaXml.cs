@@ -172,7 +172,7 @@ public static class GeneradorGuiaXml
                     CatalogosGre.MotivoTraslado.Descripciones[guia.MotivoTraslado])),
 
             new XElement(Cbc + "GrossWeightMeasure",
-                new XAttribute("unitCode", "KGM"),
+                new XAttribute("unitCode", guia.UnidadPeso is "TNE" ? "TNE" : "KGM"),   // 24 oct
                 Decimal3(guia.PesoBruto)));
 
         if (guia.NumeroBultos is > 0)

@@ -506,6 +506,42 @@ public sealed class RepositorioGuias
         return fila;
     }
 
+    /// <summary>24 oct: lo que hace falta para imprimir la guía.</summary>
+    public sealed class GuiaParaPdf
+    {
+        public string Numero { get; set; } = "";
+        public string Estado { get; set; } = "";
+        public string? MensajeSunat { get; set; }
+        public string Gre { get; set; } = "{}";
+        public string? RutaCdr { get; set; }
+        public string? LogoRuta { get; set; }
+        public string? FormatoPdf { get; set; }   // 24 oct: moderno o clasico
+    }
+
+    public async Task<GuiaParaPdf?> ObtenerParaPdfAsync(
+        Guid tenantId, Guid guiaId, CancellationToken ct = default)
+    {
+        await using var sesion = await _sesiones.AbrirAsync(tenantId, ct);
+
+        var fila = await sesion.Conexion.QuerySingleOrDefaultAsync<GuiaParaPdf>(
+            new CommandDefinition(
+                """
+                SELECT serie || '-' || lpad(correlativo::text, 8, '0') AS "Numero",
+                       g.estado        AS "Estado",
+                       g.mensaje_sunat AS "MensajeSunat",
+                       g.gre::text     AS "Gre",
+                       g.ruta_cdr      AS "RutaCdr",
+                       (SELECT t.logo_ruta FROM tenants t WHERE t.id = g.tenant_id) AS "LogoRuta",
+                       (SELECT t.formato_pdf FROM tenants t WHERE t.id = g.tenant_id) AS "FormatoPdf"
+                  FROM guias g
+                 WHERE g.id = @guiaId
+                """,
+                new { guiaId }, sesion.Transaccion, cancellationToken: ct));
+
+        await sesion.ConfirmarAsync(ct);
+        return fila;
+    }
+
     /// <summary>Reconstruye el modelo desde lo guardado.</summary>
     public static GuiaRemision Deserializar(string greJson) =>
         JsonSerializer.Deserialize<GuiaRemision>(greJson, Json)

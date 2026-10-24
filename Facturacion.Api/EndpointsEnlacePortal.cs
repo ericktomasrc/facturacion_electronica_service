@@ -36,7 +36,7 @@ public static class EndpointsEnlacePortal
                     "La empresa no tiene dirección en el portal de comprobantes.",
                     "Sin ella no hay enlace que mandar. Se configura en el panel del servicio (Empresas › Portal)."));
 
-            var c = await portal.ObtenerAsync(tenant.Id, id, ct);
+            var c = await portal.ObtenerAsync(tenant.Id, id, ct, recienEmitido: true);
             if (c is null)
                 return Results.NotFound(new RespuestaError(
                     "No se encontró el comprobante, o SUNAT lo rechazó.",

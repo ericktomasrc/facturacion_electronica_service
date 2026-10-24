@@ -212,8 +212,10 @@ public sealed class RepositorioPortal
     /// mismos filtros que la búsqueda: un acceso no abre lo que el portal no
     /// enseña.
     /// </summary>
+    /// <param name="recienEmitido">24 oct: para el enlace de WhatsApp, también el que
+    /// todavía se está firmando (BORRADOR): la plataforma lo pide apenas se emite.</param>
     public async Task<ComprobantePortal?> ObtenerAsync(
-        Guid tenantId, Guid comprobanteId, CancellationToken ct = default)
+        Guid tenantId, Guid comprobanteId, CancellationToken ct = default, bool recienEmitido = false)
     {
         await using var sesion = await _sesiones.AbrirAsync(tenantId, ct);
 
@@ -224,9 +226,9 @@ public sealed class RepositorioPortal
                   FROM comprobantes c
                  WHERE c.id = @comprobanteId
                    AND c.tipo_comprobante IN {TiposVisibles}
-                   AND c.estado IN {EstadosConEnlace}
+                   AND (c.estado IN {EstadosConEnlace} OR (@recienEmitido AND c.estado = 'BORRADOR'))
                 """,
-                new { comprobanteId },
+                new { comprobanteId, recienEmitido },
                 sesion.Transaccion, cancellationToken: ct));
 
         await sesion.ConfirmarAsync(ct);

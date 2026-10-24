@@ -229,6 +229,67 @@ public static class EndpointsGuias
             IAlmacenArchivos archivos, CancellationToken ct) =>
             DescargarAsync(id, "cdr", emisor, guias, archivos, ct))
             .WithSummary("Descarga la constancia de recepción");
+
+        // 24 oct: la hoja para el conductor.
+        grupo.MapGet("/{id:guid}/pdf", async (
+            Guid id, ContextoEmisor emisor, RepositorioGuias guias,
+            IAlmacenArchivos archivos, CancellationToken ct) =>
+        {
+            var datos = await guias.ObtenerParaPdfAsync(emisor.Exigir().Id, id, ct);
+
+            if (datos is null)
+                return Results.NotFound(new RespuestaError("No se encontró la guía."));
+
+            var guia = RepositorioGuias.Deserializar(datos.Gre);
+
+            string? enlaceQr = null;
+            if (!string.IsNullOrWhiteSpace(datos.RutaCdr))
+            {
+                try
+                {
+                    var cdr = await archivos.LeerAsync(datos.RutaCdr, ct);
+                    if (cdr is not null) enlaceQr = EnlaceQrGuia.DesdeCdr(cdr);
+                }
+                catch (Exception) when (!ct.IsCancellationRequested)
+                {
+                    // Sin QR, pero con PDF.
+                }
+            }
+
+            byte[]? logo = null;
+            if (!string.IsNullOrWhiteSpace(datos.LogoRuta))
+            {
+                try { logo = await archivos.LeerAsync(datos.LogoRuta, ct); }
+                catch (Exception) when (!ct.IsCancellationRequested) { }
+            }
+
+            // 24 oct: el mismo formato A4 que la empresa eligió para sus
+            // facturas: «clásico» (como el de SOL) o «moderno».
+            var opciones = new Facturacion.Pdf.OpcionesImpresion(
+                EstadoSunat: datos.Estado, MensajeSunat: datos.MensajeSunat, Logo: logo,
+                Estilo: FormatoPdf.Normalizar(datos.FormatoPdf));
+
+            static byte[] Dibujar(GuiaRemision g, string? qr, Facturacion.Pdf.OpcionesImpresion o) =>
+                o.Estilo == FormatoPdf.Clasico
+                    ? Facturacion.Pdf.GeneradorGuiaPdfClasico.Generar(g, qr, o)
+                    : Facturacion.Pdf.GeneradorGuiaPdf.Generar(g, qr, o);
+
+            byte[] pdf;
+            try
+            {
+                pdf = Dibujar(guia, enlaceQr, opciones);
+            }
+            catch (Exception) when (logo is not null)
+            {
+                pdf = Dibujar(guia, enlaceQr, opciones with { Logo = null });
+            }
+
+            return Results.File(pdf, "application/pdf", $"{datos.Numero}.pdf");
+        })
+        .WithSummary("PDF de la guía (la hoja que lleva el conductor)")
+        .WithDescription(
+            "Con QR de consulta en SUNAT cuando la guía ya fue aceptada. Si " +
+            "todavía no lo está, la hoja lo dice en grande: el vehículo no sale.");
     }
 
     // ------------------------------------------------------------- apoyo
@@ -316,6 +377,7 @@ public static class EndpointsGuias
             ModalidadTraslado = p.ModalidadTraslado,
 
             PesoBruto = p.PesoBruto,
+            UnidadPeso = string.IsNullOrWhiteSpace(p.UnidadPeso) ? "KGM" : p.UnidadPeso.Trim().ToUpperInvariant(),   // 24 oct
             NumeroBultos = p.NumeroBultos,
 
             PuntoPartida = new DireccionTraslado(
@@ -381,6 +443,11 @@ public static class EndpointsGuias
 
         guia.Indicadores = p.Indicadores ?? [];
 
+        // 24 oct: el vehículo menor (M1 o L) se declara con su indicador; sin
+        // él SUNAT pide placa y conductor.
+        if (guia.VehiculoMenor && !guia.EsTransportista && !guia.Indicadores.Contains(IndicadorGre.VehiculoMenor))
+            guia.Indicadores.Add(IndicadorGre.VehiculoMenor);
+
         if (p.OperadorSubcontratado is not null)
         {
             guia.OperadorSubcontratado = new Transportista(
@@ -415,7 +482,11 @@ public static class EndpointsGuias
                 // Si no se indica el RUC del emisor, se asume que el
                 // documento lo emitió el propio remitente. Es el caso más
                 // común: la factura de la venta que origina el traslado.
-                doc.RucEmisor ?? tenant.Ruc));
+                // 24 oct: solo en los que llevan RUC (no en una constancia
+                // de detracción ni en una DAM).
+                string.IsNullOrWhiteSpace(doc.RucEmisor)
+                    ? (GuiaRemision.DocumentosQueExigenRuc.Contains(doc.TipoDocumento) ? tenant.Ruc : null)
+                    : doc.RucEmisor.Trim()));
         }
 
         return guia;
@@ -478,7 +549,10 @@ public record PeticionGuia(
     List<string>? Indicadores = null,
 
     /// <summary>El transportista subcontratado, si lo hay.</summary>
-    TransportistaPeticion? OperadorSubcontratado = null);
+    TransportistaPeticion? OperadorSubcontratado = null,
+
+    /// <summary>24 oct: unidad del peso bruto: "KGM" (por defecto) o "TNE".</summary>
+    string? UnidadPeso = null);
 
 public record DireccionPeticion(
     string Ubigeo,

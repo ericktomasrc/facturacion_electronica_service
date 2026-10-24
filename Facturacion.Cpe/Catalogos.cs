@@ -268,6 +268,16 @@ public static class MotivoNotaCredito
     public const string BonificacionOtros = "08";
     public const string DisminucionEnElValor = "09";
     public const string OtrosConceptos = "10";
+    public const string AjustesExportacion = "11";
+    public const string AjustesIvap = "12";
+    public const string AjusteMontosYFechasDePago = "13";
+
+    /// <summary>24 oct: los 13 códigos del catálogo 09.</summary>
+    public static readonly string[] Todos =
+        ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13"];
+
+    /// <summary>24 oct: los que SUNAT no acepta sobre boletas.</summary>
+    public static readonly string[] SoloFacturas = ["04", "05", "08"];
 
     public static string Descripcion(string codigo) => codigo switch
     {
@@ -281,6 +291,9 @@ public static class MotivoNotaCredito
         BonificacionOtros => "BONIFICACION",
         DisminucionEnElValor => "DISMINUCION EN EL VALOR",
         OtrosConceptos => "OTROS CONCEPTOS",
+        AjustesExportacion => "AJUSTES DE OPERACIONES DE EXPORTACION",
+        AjustesIvap => "AJUSTES AFECTOS AL IVAP",
+        AjusteMontosYFechasDePago => "CORRECCION DEL MONTO NETO PENDIENTE DE PAGO Y/O FECHAS DE VENCIMIENTO",
         _ => "OTROS CONCEPTOS"
     };
 }
@@ -291,12 +304,19 @@ public static class MotivoNotaDebito
     public const string InteresPorMora = "01";
     public const string AumentoEnElValor = "02";
     public const string PenalidadesOtros = "03";
+    public const string AjustesExportacion = "10";
+    public const string AjustesIvap = "11";
+
+    /// <summary>24 oct: los 5 códigos del catálogo 10.</summary>
+    public static readonly string[] Todos = ["01", "02", "03", "10", "11"];
 
     public static string Descripcion(string codigo) => codigo switch
     {
         InteresPorMora => "INTERES POR MORA",
         AumentoEnElValor => "AUMENTO EN EL VALOR",
         PenalidadesOtros => "PENALIDADES U OTROS CONCEPTOS",
+        AjustesExportacion => "AJUSTES DE OPERACIONES DE EXPORTACION",
+        AjustesIvap => "AJUSTES AFECTOS AL IVAP",
         _ => "OTROS CONCEPTOS"
     };
 }

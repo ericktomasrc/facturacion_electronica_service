@@ -117,9 +117,14 @@ public static class IndicadorGre
     public const string RetornoVehiculoEnvaseVacio =
         "SUNAT_Envio_IndicadorRetornoVehiculoEnvaseVacio";
 
-    /// <summary>Traslado en vehículo de categoría M1 o L.</summary>
+    /// <summary>
+    /// Traslado en vehículo de categoría M1 o L.
+    ///
+    /// 24 oct: el literal es «…VehiculoM1L» (decía «…VehiculoM»). Sin él,
+    /// SUNAT pide la placa y el conductor aunque el vehículo sea menor.
+    /// </summary>
     public const string VehiculoMenor =
-        "SUNAT_Envio_IndicadorTrasladoVehiculoM";
+        "SUNAT_Envio_IndicadorTrasladoVehiculoM1L";
 
     /// <summary>
     /// El remitente declara el vehículo y los conductores del transportista.
@@ -133,6 +138,22 @@ public static class IndicadorGre
 
     public static bool EsValido(string indicador) =>
         indicador.StartsWith("SUNAT_", StringComparison.Ordinal);
+
+    /// <summary>24 oct: cómo se lee cada indicador en la hoja impresa.</summary>
+    public static string Nombre(string indicador) => indicador switch
+    {
+        TransporteSubcontratado => "Transporte subcontratado",
+        PagaFleteRemitente => "Flete pagado por el remitente",
+        PagaFleteSubcontratador => "Flete pagado por el subcontratador",
+        PagaFleteTercero => "Flete pagado por un tercero",
+        TrasladoTotal => "Traslado total",
+        TransbordoProgramado => "Transbordo programado",
+        RetornoVehiculoVacio => "Retorno de vehículo vacío",
+        RetornoVehiculoEnvaseVacio => "Retorno de vehículo con envases o embalajes vacíos",
+        VehiculoMenor => "Traslado en vehículo M1 o L",
+        VehiculoYConductoresDelTransportista => "Vehículo y conductores del transportista",
+        _ => indicador
+    };
 }
 
 /// <summary>Una dirección de partida o de llegada.</summary>
@@ -302,8 +323,14 @@ public sealed class GuiaRemision
 
     public string ModalidadTraslado { get; set; } = CatalogosGre.ModalidadTraslado.Privado;
 
-    /// <summary>Peso total en kilogramos.</summary>
+    /// <summary>Peso total, en la unidad de UnidadPeso (kilos si no se dice).</summary>
     public decimal PesoBruto { get; set; }
+
+    /// <summary>
+    /// 24 oct: la unidad del peso bruto: "KGM" kilogramos (por defecto) o
+    /// "TNE" toneladas, las dos que acepta SUNAT.
+    /// </summary>
+    public string UnidadPeso { get; set; } = "KGM";
 
     /// <summary>Cuántos bultos. Obligatorio en importaciones.</summary>
     public int? NumeroBultos { get; set; }
@@ -527,6 +554,9 @@ public sealed class GuiaRemision
         if (PesoBruto <= 0)
             problemas.Add("El peso bruto debe ser mayor que cero.");
 
+        if (UnidadPeso is not ("KGM" or "TNE"))
+            problemas.Add($"La unidad del peso '{UnidadPeso}' no vale: KGM (kilos) o TNE (toneladas).");
+
         if (Bienes.Count == 0)
             problemas.Add("La guía no tiene bienes.");
 
@@ -571,11 +601,9 @@ public sealed class GuiaRemision
         // Lo exige la regla 3380, y el mensaje de rechazo no lo dice claro:
         // devuelve un código 99 genérico con el detalle escondido dentro de
         // la respuesta.
-        var exigenRuc = new[] { "01", "03", "04", "09", "12", "48", "92" };
-
         foreach (var doc in DocumentosRelacionados)
         {
-            if (exigenRuc.Contains(doc.TipoDocumento) &&
+            if (DocumentosQueExigenRuc.Contains(doc.TipoDocumento) &&
                 string.IsNullOrWhiteSpace(doc.RucEmisor))
             {
                 problemas.Add(
@@ -727,6 +755,13 @@ public sealed class GuiaRemision
                 "entiende qué pinta ese tercero en el documento (error 4424).");
         }
     }
+
+    /// <summary>
+    /// Los documentos relacionados que llevan el RUC de quien los emitió
+    /// (regla 3380): comprobantes y guías. Una constancia de detracción o una
+    /// DAM no lo llevan.
+    /// </summary>
+    public static readonly string[] DocumentosQueExigenRuc = ["01", "03", "04", "09", "12", "31", "48", "92"];
 
     private static bool EsUbigeo(string? valor) =>
         valor is { Length: 6 } && valor.All(char.IsDigit);

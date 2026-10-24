@@ -212,6 +212,15 @@ public class NotaCredito : ComprobanteBase
     public string CodigoMotivo { get; set; } = MotivoNotaCredito.AnulacionDeLaOperacion;
     public string DescripcionMotivo { get; set; } = "";
     public DocumentoAfectado Afectado { get; set; } = new();
+
+    /// <summary>
+    /// 24 oct: SOLO EL MOTIVO 13 (corrección del monto neto pendiente y/o de
+    /// las fechas y montos de las cuotas). Las cuotas NUEVAS; el monto neto
+    /// pendiente es su suma. Va en cac:PaymentTerms, como en la factura.
+    /// </summary>
+    public List<CuotaCredito> Cuotas { get; set; } = [];
+
+    public decimal MontoPendiente => CalculadoraTotales.Redondear(Cuotas.Sum(c => c.Monto));
 }
 
 /// <summary>Nota de débito. Aumenta el importe de un comprobante ya emitido.</summary>

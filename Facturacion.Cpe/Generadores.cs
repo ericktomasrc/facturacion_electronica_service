@@ -362,6 +362,36 @@ public static class GeneradorNotaXml
                 n.DescripcionMotivo, MotivoNotaDebito.Descripcion(n.CodigoMotivo)),
             afectado: n.Afectado);
 
+    /// <summary>
+    /// 24 oct: la forma de pago de una nota de crédito con motivo 13: el
+    /// bloque «Credito» con el monto neto pendiente y un bloque por cuota.
+    /// Las demás notas no llevan forma de pago.
+    /// </summary>
+    private static IEnumerable<XElement> PagoDeNota(ComprobanteBase c)
+    {
+        if (c is not NotaCredito { CodigoMotivo: MotivoNotaCredito.AjusteMontosYFechasDePago } n || n.Cuotas.Count == 0)
+            yield break;
+
+        yield return new XElement(Ns.Cac + "PaymentTerms",
+            new XElement(Ns.Cbc + "ID", "FormaPago"),
+            new XElement(Ns.Cbc + "PaymentMeansID", ReglasCredito.Credito),
+            new XElement(Ns.Cbc + "Amount",
+                new XAttribute("currencyID", n.Moneda),
+                n.MontoPendiente.ToString("0.00", Inv)));
+
+        foreach (var cuota in n.Cuotas.OrderBy(x => x.Numero))
+        {
+            yield return new XElement(Ns.Cac + "PaymentTerms",
+                new XElement(Ns.Cbc + "ID", "FormaPago"),
+                new XElement(Ns.Cbc + "PaymentMeansID", cuota.Identificador),
+                new XElement(Ns.Cbc + "Amount",
+                    new XAttribute("currencyID", n.Moneda),
+                    cuota.Monto.ToString("0.00", Inv)),
+                new XElement(Ns.Cbc + "PaymentDueDate",
+                    cuota.FechaVencimiento.ToString("yyyy-MM-dd", Inv)));
+        }
+    }
+
     private static string ResolverDescripcion(string propia, string porCatalogo) =>
         string.IsNullOrWhiteSpace(propia) ? porCatalogo : propia;
 
@@ -424,6 +454,10 @@ public static class GeneradorNotaXml
 
             // Una nota puede llevarlos igual que la factura: por ejemplo la
             // que devuelve el recargo al consumo de un servicio anulado.
+            // 24 oct: motivo 13, las cuotas nuevas (UBL: PaymentTerms va
+            // antes de AllowanceCharge).
+            PagoDeNota(comprobante),
+
             CargosYDescuentosGlobales(
                 comprobante.CargosGlobales, comprobante.Moneda),
 
