@@ -47,6 +47,12 @@
 # El portal del receptor NO se protege: lo abren los clientes de tus clientes.
 #
 # PARA PRODUCCIÓN: se quitan las dos líneas «import protegido_qa».
+#
+# 24 OCT: QUITADA TAMBIÉN EN QA, a pedido de Erick (el usuario «qa» cansaba).
+# La plataforma y el panel ya piden su propio ingreso (contraseña + segundo
+# factor, o Google) y el registro tiene Turnstile. Se deja el bloque por si
+# hay que volver a ponerla: basta con volver a escribir «import protegido_qa».
+# Para que los buscadores no indexen QA: «noindex» en todas las respuestas.
 # -----------------------------------------------------------------------------
 (protegido_qa) {
 	@fuera_de_qa {
@@ -60,8 +66,8 @@
 
 {$DOMINIO_SERVICIO} {
 	import comun
-	import protegido_qa
 	header X-Frame-Options "DENY"
+	header X-Robots-Tag "noindex, nofollow"
 	reverse_proxy facturacion-api:8080
 }
 
@@ -71,13 +77,14 @@
 {$DOMINIO_PORTAL} {
 	import comun
 	header X-Frame-Options "DENY"
+	header X-Robots-Tag "noindex, nofollow"
 	rewrite * /portal{uri}
 	reverse_proxy facturacion-api:8080
 }
 
 {$DOMINIO_PLATAFORMA} {
 	import comun
-	import protegido_qa
 	header X-Frame-Options "DENY"
+	header X-Robots-Tag "noindex, nofollow"
 	reverse_proxy plataforma:8080
 }
