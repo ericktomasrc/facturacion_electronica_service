@@ -969,6 +969,7 @@ static ComprobanteBase ConstruirComprobante(
         UnidadMedida = l.UnidadMedida,
         Cantidad = l.Cantidad,
         ValorUnitario = l.ValorUnitario,
+        PrecioUnitario = l.PrecioUnitario,   // e182
         DescuentoPorcentaje = l.DescuentoPorcentaje,
         TipoAfectacionIgv = l.TipoAfectacionIgv,
         PorcentajeIgv = l.PorcentajeIgv

@@ -506,6 +506,14 @@ public class LineaDto
     [Range(0, double.MaxValue)]
     public decimal ValorUnitario { get; set; }
 
+    /// <summary>
+    /// e182 — Opcional: el precio CON IGV, si así se vendió (28.50). Con él la
+    /// línea gravada se calcula desde el total (2 × 28.50 = 57.00, no 57.01).
+    /// Se sigue mandando también valorUnitario (el precio sin IGV).
+    /// </summary>
+    [Range(0, double.MaxValue)]
+    public decimal? PrecioUnitario { get; set; }
+
     public decimal DescuentoPorcentaje { get; set; }
 
     /// <summary>

@@ -407,6 +407,7 @@ public static class EndpointsNotas
             UnidadMedida = l.UnidadMedida,
             Cantidad = l.Cantidad,
             ValorUnitario = l.ValorUnitario,
+            PrecioUnitario = l.PrecioUnitario,   // e182
             DescuentoPorcentaje = l.DescuentoPorcentaje,
             TipoAfectacionIgv = l.TipoAfectacionIgv,
 

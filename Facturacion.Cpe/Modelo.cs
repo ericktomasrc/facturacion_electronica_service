@@ -295,6 +295,20 @@ public class LineaComprobante
     public decimal ValorUnitario { get; set; }
 
     /// <summary>
+    /// e182 — EL PRECIO CON IGV, si así se vendió (28.50). Opcional.
+    ///
+    /// Con él, una línea gravada se calcula DESDE EL TOTAL, como lo hacen las
+    /// demás facturadoras: total = cantidad × precio (57.00), valor de venta =
+    /// total / 1.18 (48.31) e IGV = la diferencia (8.69). Sin él, desde el
+    /// valor unitario (48.31 + 8.70 = 57.01): el céntimo de más que el cliente
+    /// no entiende. SUNAT acepta los dos (la diferencia del IGV con el 18 %
+    /// exacto queda muy dentro de su tolerancia de un sol).
+    ///
+    /// No se usa con ISC, ICBPER ni en las gratuitas: ahí manda el valor.
+    /// </summary>
+    public decimal? PrecioUnitario { get; set; }
+
+    /// <summary>
     /// Descuento sobre esta línea, en porcentaje. 10 significa 10%.
     ///
     /// SE APLICA ANTES DEL IGV: el impuesto se calcula sobre el valor ya

@@ -61,10 +61,23 @@ public static class CalculadoraTotales
         decimal descuentoGlobalPorcentaje = 0m,
         DateTime? fechaEmision = null)
     {
-        var valorBruto = Redondear(linea.Cantidad * linea.ValorUnitario);
-
         var factor = FactorDescuento(
             linea.DescuentoPorcentaje, descuentoGlobalPorcentaje);
+
+        // e182: DESDE EL TOTAL, cuando el precio se dio con IGV.
+        if (DesdeElTotal(linea))
+        {
+            var tasa = linea.PorcentajeIgv / 100m;
+            var brutoConIgv = Redondear(linea.Cantidad * linea.PrecioUnitario!.Value);
+            var totalConIgv = factor > 0 ? Redondear(brutoConIgv * (1m - factor)) : brutoConIgv;
+            var bruto = Redondear(brutoConIgv / (1m + tasa));
+            var venta = Redondear(totalConIgv / (1m + tasa));
+            var impuesto = totalConIgv - venta;
+            var precio = linea.Cantidad == 0 ? 0m : Redondear(totalConIgv / linea.Cantidad);
+            return new LineaCalculada(linea, factor, bruto, bruto - venta, venta, impuesto, precio);
+        }
+
+        var valorBruto = Redondear(linea.Cantidad * linea.ValorUnitario);
 
         var descuento = factor > 0 ? Redondear(valorBruto * factor) : 0m;
 
@@ -119,6 +132,14 @@ public static class CalculadoraTotales
             linea, factor, valorBruto, descuento, valorVenta, igv,
             precioUnitarioConIgv, icbper, tasaIcbper, isc);
     }
+
+    /// <summary>e182: ¿esta línea se calcula desde el precio con IGV?</summary>
+    public static bool DesdeElTotal(LineaComprobante l) =>
+        l.PrecioUnitario is > 0
+        && !l.TieneIsc && !l.AfectoIcbper
+        && !AfectacionIgv.EsGratuita(l.TipoAfectacionIgv)
+        && AfectacionIgv.GeneraIgv(l.TipoAfectacionIgv)
+        && l.PorcentajeIgv > 0;
 
     public static IReadOnlyList<LineaCalculada> CalcularLineas(ComprobanteBase comprobante) =>
         comprobante.Lineas
