@@ -19,7 +19,7 @@ rellena los valores. La llave maestra debe ser **la misma que ya usabas**, o
 los certificados guardados no se podrán descifrar:
 
 ```
-FACTURACION_LLAVE_MAESTRA=1+QZmOPbcU8iTb4QufsvtBaoorHh2uSwSdTtYg68VIw=
+FACTURACION_LLAVE_MAESTRA=<la que ya tienes en tu .env; nunca la escribas aquí>
 ```
 
 **2. Añade al `.gitignore`:**

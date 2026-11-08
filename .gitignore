@@ -83,6 +83,8 @@ appsettings.Local.json
 secrets.json
 *.env
 .env.*
+.env_*
+# (respaldos sueltos del .env, como .env_bkb: nunca a git)
 
 ## ---------------------------------------------------------------
 ## Esquemas XSD descargados
