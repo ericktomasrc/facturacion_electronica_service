@@ -56,6 +56,40 @@ public class Reglas2027Tests
     }
 
     [Fact]
+    public void Sin_informar_gratuitas_no_van_ni_el_importe_ni_el_9996()
+    {
+        // SUNAT beta (7 nov 2026) rechaza el 05 y el 06 con el 2256.
+        foreach (var fecha in new[] { new DateTime(2026, 11, 7), new DateTime(2027, 1, 2) })
+        {
+            var resumen = new ResumenDiario
+            {
+                Emisor = new Emisor { Ruc = "20999999990", RazonSocial = "PRUEBA" },
+                FechaReferencia = fecha.AddDays(-1),
+                FechaGeneracion = fecha,
+                Gratuitas = GratuitasResumen.NoInformar,
+                Lineas = [LineaConGratuitas()]
+            };
+
+            var xml = GeneradorResumenXml.Generar(resumen).ToString();
+            var codigos = Regex.Matches(xml, @"InstructionID>(\d\d)<").Select(m => m.Groups[1].Value).ToList();
+
+            Assert.Equal(["01"], codigos);
+            Assert.DoesNotContain(">GRA<", xml);
+            Assert.Contains(">IGV<", xml);
+        }
+    }
+
+    [Fact]
+    public void Las_gratuitas_se_omiten_en_beta_y_van_por_fecha_en_produccion()
+    {
+        Assert.Equal(GratuitasResumen.NoInformar, VigenciaSunat.GratuitasPara("beta"));
+        Assert.Equal(GratuitasResumen.SegunFecha, VigenciaSunat.GratuitasPara("produccion"));
+        Assert.True(VigenciaSunat.LeerGratuitas(" Fecha ", out var f));
+        Assert.Equal(GratuitasResumen.SegunFecha, f);
+        Assert.False(VigenciaSunat.LeerGratuitas("otra", out _));
+    }
+
+    [Fact]
     public void El_resumen_lleva_la_tasa_y_el_igv_de_las_gratuitas()
     {
         var resumen = new ResumenDiario

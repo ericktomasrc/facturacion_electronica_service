@@ -32,7 +32,9 @@ namespace Facturacion.Cpe;
 ///    el código 05 del catálogo 11 (mandar 06–09 antes era el error 2256).
 ///    Desde entonces SUNAT desactiva el 05 y pide cada clase con su código:
 ///    06 gravadas, 07 exoneradas, 08 inafectas, 09 exportación. Ver
-///    VigenciaSunat y TipoMontoResumen.
+///    VigenciaSunat y TipoMontoResumen. Y SUNAT BETA HOY NO ACEPTA NINGUNA
+///    DE LAS DOS (7 nov 2026: 2256 con el 05 y con el 06): para beta el
+///    worker pide GratuitasResumen.NoInformar y no se declaran.
 ///
 /// 3. LA PERCEPCIÓN NO ES UN AllowanceCharge sino un nodo propio de SUNAT,
 ///    con otros nombres y siempre en soles.
@@ -77,7 +79,7 @@ public static class GeneradorResumenXml
         );
 
         foreach (var linea in r.Lineas.OrderBy(l => l.Orden))
-            raiz.Add(BloqueLinea(linea, r.FechaGeneracion));
+            raiz.Add(BloqueLinea(linea, r.FechaGeneracion, r.Gratuitas));
 
         return new XDocument(new XDeclaration("1.0", "UTF-8", null), raiz);
     }
@@ -93,7 +95,8 @@ public static class GeneradorResumenXml
     ///
     /// La percepción va ANTES del estado, que es donde menos se la espera.
     /// </summary>
-    private static XElement BloqueLinea(LineaResumen l, DateTime fechaGeneracion)
+    private static XElement BloqueLinea(
+        LineaResumen l, DateTime fechaGeneracion, GratuitasResumen gratuitasModo)
     {
         var nodo = new XElement(Sac + "SummaryDocumentsLine",
             new XElement(Ns.Cbc + "LineID", l.Orden),
@@ -164,7 +167,14 @@ public static class GeneradorResumenXml
         // Lo decide la fecha de GENERACIÓN del resumen, que es la que SUNAT
         // ve al recibirlo: un resumen generado el 2 de enero con boletas del
         // 31 de diciembre ya va con las reglas nuevas.
-        if (VigenciaSunat.Rigen2027(fechaGeneracion))
+        //
+        // NoInformar (SUNAT beta, 7 nov 2026): no se declaran, porque beta
+        // rechaza el 05 y el 06–09 por igual y un solo error tumba el resumen.
+        if (gratuitasModo == GratuitasResumen.NoInformar)
+        {
+            // Nada: la boleta ya las lleva y fue aceptada.
+        }
+        else if (VigenciaSunat.Rigen2027(fechaGeneracion))
         {
             if (l.TotalGratuitoGravado > 0)
                 nodo.Add(Monto(l.Moneda, l.TotalGratuitoGravado, TipoMontoResumen.GratuitasGravadas));
@@ -216,7 +226,8 @@ public static class GeneradorResumenXml
 
         // El IGV de las gratuitas. También lleva Percent: la regla 2992 lo
         // exige para el 1000 y para el 9996.
-        if (l.TotalIgvGratuitas > 0)
+        // Con NoInformar tampoco: un 9996 sin su importe de gratuitas no cuadra.
+        if (l.TotalIgvGratuitas > 0 && gratuitasModo != GratuitasResumen.NoInformar)
         {
             nodo.Add(BloqueTributo(l.Moneda, l.TotalIgvGratuitas, l.TasaIgv,
                 "9996", "GRA", "FRE"));

@@ -11,6 +11,7 @@
 #   - Los archivos (XML, CDR, PDF, logos) van a Cloudflare R2: no hay MinIO.
 #   - Los logs por día (038) quedan en volúmenes: sobreviven a un reinicio.
 #     Para leerlos:  docker compose -f compose.aplicacion.yml exec plataforma ls /app/logs
+#     O en la plataforma: Administración › Errores del sistema (e225).
 #   - Las imágenes se construyen en el PC o aquí (ver GUIA-QA.md).
 # =============================================================================
 
@@ -72,8 +73,11 @@ services:
     environment:
       PROXY_IP_CONFIABLE: 172.30.0.10
       LOGS_CARPETA: /app/logs
+      # e225: «Errores del sistema» lee también los logs del servicio (solo lectura).
+      LOGS_SERVICIO_CARPETA: /app/logs-servicio
     volumes:
       - logs_plataforma:/app/logs
+      - logs_servicio:/app/logs-servicio:ro
     depends_on:
       facturacion-api: { condition: service_started }
     networks: [interna]

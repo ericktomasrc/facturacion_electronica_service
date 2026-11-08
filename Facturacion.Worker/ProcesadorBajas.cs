@@ -268,6 +268,12 @@ public sealed class ProcesadorBajas
                 EsperaReintento.Calcular(baja.IntentosFallidos),
                 resultado.Descripcion, ct);
 
+            // e227: lo mismo que en los resúmenes: a la vista desde la 3.ª vez.
+            if (baja.IntentosFallidos + 1 >= ProcesadorResumenes.ConsultasAntesDeAvisar)
+                _log.LogWarning(
+                    "{Id}: SUNAT no contesta la consulta del ticket {Ticket} ({Veces} intentos): {Mensaje} Se sigue preguntando solo.",
+                    baja.Identificador, baja.Ticket, baja.IntentosFallidos + 1, resultado.Descripcion);
+
             return;
         }
 

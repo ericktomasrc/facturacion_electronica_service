@@ -172,11 +172,16 @@ public sealed class ProcesadorResumenes
             ?? throw new InvalidOperationException(
                 "El emisor no tiene certificado activo.");
 
+        // 036: el SUNAT de sus boletas (beta o producción), no el de la empresa hoy.
+        // También decide cómo van las gratuitas (beta hoy no acepta ninguna forma).
+        var ambiente = await _credenciales.AmbienteDeResumenAsync(resumen.Id, ct);
+
         // --- Reconstruir el documento ---
 
         var documento = new ResumenDiario
         {
             Emisor = ArmarEmisor(tenant),
+            Gratuitas = VigenciaSunat.GratuitasPara(ambiente),
             FechaReferencia = resumen.FechaReferencia,
             FechaGeneracion = resumen.FechaGeneracion,
             Correlativo = resumen.Correlativo,
@@ -221,8 +226,7 @@ public sealed class ProcesadorResumenes
         var zip = EmpaquetadorZip.Comprimir(documento.NombreArchivo, bytes);
 
         // 036: al SUNAT de sus boletas (beta o producción), no al de la empresa hoy.
-        var configuracion = await _credenciales.ObtenerAsync(resumen.TenantId,
-            await _credenciales.AmbienteDeResumenAsync(resumen.Id, ct), ct);
+        var configuracion = await _credenciales.ObtenerAsync(resumen.TenantId, ambiente, ct);
 
         using var enviador = new EnviadorSunatSoap(configuracion);
 
@@ -254,6 +258,9 @@ public sealed class ProcesadorResumenes
 
     /// <summary>Veces que se vuelve a preguntar por un ticket que SUNAT no conoce (0127) antes de reenviar.</summary>
     private const int ConsultasTicketPerdido = 6;
+
+    /// <summary>e227: desde cuántas consultas sin respuesta de SUNAT se anota un aviso en el log.</summary>
+    internal const int ConsultasAntesDeAvisar = 3;
 
     public async Task ConsultarTicketsAsync(CancellationToken ct)
     {
@@ -332,6 +339,13 @@ public sealed class ProcesadorResumenes
                 resumen.Id,
                 EsperaReintento.Calcular(resumen.IntentosFallidos),
                 resultado.Descripcion, ct);
+
+            // e227: si SUNAT lleva varias consultas sin contestar, queda en el
+            // log (y en «Errores del sistema»). Antes se reintentaba en silencio.
+            if (resumen.IntentosFallidos + 1 >= ConsultasAntesDeAvisar)
+                _log.LogWarning(
+                    "{Id}: SUNAT no contesta la consulta del ticket {Ticket} ({Veces} intentos): {Mensaje} Se sigue preguntando solo.",
+                    resumen.Identificador, resumen.Ticket, resumen.IntentosFallidos + 1, resultado.Descripcion);
 
             return;
         }

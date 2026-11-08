@@ -50,6 +50,12 @@ public class ResumenDiario
 
     public List<LineaResumen> Lineas { get; set; } = [];
 
+    /// <summary>
+    /// Cómo van las gratuitas. Lo decide el worker por ambiente
+    /// (VigenciaSunat.GratuitasPara): SUNAT beta hoy no acepta ninguna forma.
+    /// </summary>
+    public GratuitasResumen Gratuitas { get; set; } = GratuitasResumen.SegunFecha;
+
     /// <summary>Identificador del resumen: RC-20260914-1</summary>
     public string Identificador => $"RC-{FechaGeneracion:yyyyMMdd}-{Correlativo}";
 

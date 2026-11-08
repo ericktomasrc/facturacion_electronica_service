@@ -167,6 +167,21 @@ if (DateTime.TryParseExact(
     VigenciaSunat.Reglas2027Desde = reglas2027;
 }
 
+// GRATUITAS DEL RESUMEN DIARIO POR AMBIENTE (7 nov 2026): «omitir» o «fecha».
+// Por defecto beta = omitir (SUNAT beta rechaza el 05 y el 06) y
+// producción = fecha. Ver VigenciaSunat.
+if (VigenciaSunat.LeerGratuitas(
+        ConfiguracionSecretos.Opcional("SUNAT_RC_GRATUITAS_BETA", ""), out var gratuitasBeta))
+{
+    VigenciaSunat.GratuitasBeta = gratuitasBeta;
+}
+
+if (VigenciaSunat.LeerGratuitas(
+        ConfiguracionSecretos.Opcional("SUNAT_RC_GRATUITAS_PRODUCCION", ""), out var gratuitasProduccion))
+{
+    VigenciaSunat.GratuitasProduccion = gratuitasProduccion;
+}
+
 var host = builder.Build();
 
 // SE DICE AL ARRANCAR QUÉ SE VA A COMPROBAR Y QUÉ NO. El modo de fallo de
